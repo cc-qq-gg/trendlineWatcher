@@ -15,7 +15,7 @@ config.py
 cookies.txt
 *.log
 logs/
-config*.py
+config_constants.py
 
 # IDE和编辑器文件
 .vscode/

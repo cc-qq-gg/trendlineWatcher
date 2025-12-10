@@ -1,0 +1,41 @@
+# 订单对照表
+okex_order_type = {
+    "1": "开多",
+    "2": "开空",
+    "3": "平多",
+    "4": "平空",
+}
+
+# 订单状态对照表
+okex_order_state = {
+    "-2": "失败",
+    "-1": "撤单成功",
+    "0": "等待成交",
+    "1": "部分成交",
+    "2": "完全成交",
+    "3": "下单中",
+    "4": "撤单中",
+}
+
+# 币种面值对照表
+coin_value_table = {
+    "btc-usdt-swap": 0.01,
+    "sol-usdt-swap": 1,
+    "eth-usdt-swap": 0.1,
+    "ltc-usdt-swap": 1,
+    "bch-usdt-swap": 0.1,
+    "xrp-usdt-swap": 100,
+    "etc-usdt-swap": 10,
+    "bsv-usdt-swap": 1,
+    "trx-usdt-swap": 1000,
+    "fil-usdt-swap": 0.1,
+}
+
+
+# sleep时间配置
+short_sleep_time = 1  # 用于和交易所交互时比较紧急的时间sleep，例如获取数据、下单
+medium_sleep_time = 2  # 用于和交易所交互时不是很紧急的时间sleep，例如获取持仓
+long_sleep_time = 10  # 用于较长的时间sleep
+
+# timeout时间
+exchange_timeout = 3000  # 3s
