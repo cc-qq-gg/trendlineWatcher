@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StochRSI监控面板</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: #f8f9fa;
+            color: #333;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 1.5rem;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .header p {
+            color: #7f8c8d;
+            font-size: 1rem;
+        }
+
+        .controls {
+            background: white;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .controls-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: white;
+            color: #333;
+        }
+
+        .btn:hover {
+            background: #f8f9fa;
+            border-color: #3498db;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn.active {
+            background: #3498db;
+            color: white;
+            border-color: #3498db;
+        }
+
+        .status {
+            padding: 0.6rem 1rem;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .table {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table th {
+            background: #34495e;
+            color: white;
+            padding: 1rem 0.8rem;
+            text-align: center;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .table td {
+            padding: 0.8rem;
+            text-align: center;
+            border-bottom: 1px solid #ecf0f1;
+            vertical-align: middle;
+        }
+
+        .table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .symbol-cell {
+            font-weight: 600;
+            font-size: 1.1rem;
+            color: #2c3e50;
+        }
+
+        .timeframe-cell {
+            transition: background-color 0.2s ease;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .timeframe-cell:hover {
+            background: #f8f9fa;
+        }
+
+        .cell-content {
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+        }
+
+        .stochrsi-value {
+            font-size: 1rem;
+            font-weight: 600;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+            color: #2c3e50;
+            margin-bottom: 0.2rem;
+        }
+
+        .signal-badge {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            z-index: 10;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+
+        .signal-badge.tbl {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .signal-badge.dbl {
+            background: #27ae60;
+            color: white;
+        }
+
+        .signal-badge:hover {
+            opacity: 0.8;
+        }
+
+        /* 模态框样式 - 简化版 */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+
+        .modal.show {
+            display: block;
+        }
+
+        .modal-content {
+            background: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+
+        .modal-header {
+            background: #34495e;
+            color: white;
+            padding: 1rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            margin: 0;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            transition: background-color 0.2s ease;
+        }
+
+        .close-btn:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+
+        .divergence-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        .divergence-item {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #3498db;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            transition: box-shadow 0.2s ease;
+        }
+
+        .divergence-item:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .divergence-item.tbl {
+            border-left-color: #e74c3c;
+        }
+
+        .divergence-item.dbl {
+            border-left-color: #27ae60;
+        }
+
+        .divergence-item {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 0.8rem;
+            margin-bottom: 0.8rem;
+            border-left: 4px solid #3498db;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            transition: box-shadow 0.2s ease;
+        }
+
+        .divergence-item:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .divergence-item.tbl {
+            border-left-color: #e74c3c;
+        }
+
+        .divergence-item.dbl {
+            border-left-color: #27ae60;
+        }
+
+        .divergence-content {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            font-size: 0.9rem;
+        }
+
+        .divergence-type {
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 50px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .divergence-type.tbl {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .divergence-type.dbl {
+            background: #27ae60;
+            color: white;
+        }
+
+        .divergence-time {
+            color: #7f8c8d;
+            font-size: 0.85rem;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+            background: #ecf0f1;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            min-width: 120px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .divergence-stochrsi {
+            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+            color: #1565c0;
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+            font-weight: 600;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+            min-width: 80px;
+            text-align: center;
+            box-shadow: 0 1px 2px rgba(21, 101, 192, 0.1);
+            flex-shrink: 0;
+        }
+
+        .divergence-price {
+            background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
+            color: #2d5016;
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+            font-weight: 600;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+            min-width: 70px;
+            text-align: center;
+            box-shadow: 0 1px 2px rgba(45, 80, 22, 0.1);
+            flex-shrink: 0;
+        }
+
+        .no-data {
+            text-align: center;
+            color: #7f8c8d;
+            font-style: italic;
+            padding: 2rem;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+
+            .header h1 {
+                font-size: 1.5rem;
+            }
+
+            .controls {
+                padding: 0.8rem;
+            }
+
+            .controls-header {
+                flex-direction: column;
+                gap: 1rem;
+                text-align: center;
+            }
+
+            .button-group {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .table {
+                font-size: 0.9rem;
+            }
+
+            .table th,
+            .table td {
+                padding: 0.6rem 0.4rem;
+            }
+
+            .stochrsi-value {
+                font-size: 0.9rem;
+            }
+
+            .signal-badge {
+                padding: 0.15rem 0.4rem;
+                font-size: 0.6rem;
+            }
+
+            .modal-content {
+                width: 95%;
+                margin: 10% auto;
+            }
+
+            .modal-header {
+                padding: 0.8rem 1rem;
+            }
+
+            .modal-title {
+                font-size: 1rem;
+            }
+
+            .modal-body {
+                padding: 1rem;
+            }
+
+            .divergence-item {
+                padding: 0.8rem;
+                margin-bottom: 0.8rem;
+            }
+
+            .divergence-header {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.6rem;
+            }
+
+            .divergence-type {
+                width: 100%;
+                text-align: center;
+            }
+
+            .divergence-time {
+                width: 100%;
+                text-align: center;
+            }
+
+            .divergence-details {
+                flex-direction: column;
+                gap: 0.6rem;
+                align-items: stretch;
+            }
+
+            .divergence-stochrsi,
+            .divergence-price {
+                width: 100%;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+
+        <div class="controls">
+            <div class="controls-header">
+                <div class="button-group">
+                    <button id="refreshBtn" class="btn">🔄 刷新数据</button>
+                    <button id="autoRefreshBtn" class="btn">⏰ 开启自动刷新</button>
+                </div>
+                <div id="status" class="status loading" style="display: none;">正在加载数据...</div>
+            </div>
+        </div>
+
+        <table class="table">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>1W</th>
+                    <th>1D</th>
+                    <th>4H</th>
+                    <th>15m</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody">
+                <tr>
+                    <td colspan="5" class="no-data">正在加载数据...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 背离信号模态框 -->
+    <div id="divergenceModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modalTitle">背离信号详情</h2>
+                <button class="close-btn" id="closeModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <ul id="divergenceList" class="divergence-list">
+                    <li class="no-data">正在加载背离信号...</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentData = {};
+        let autoRefreshInterval = null;
+        let isLoading = false;
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadData();
+
+            // 绑定事件
+            document.getElementById('refreshBtn').addEventListener('click', loadData);
+            document.getElementById('autoRefreshBtn').addEventListener('click', toggleAutoRefresh);
+            document.getElementById('closeModal').addEventListener('click', closeModal);
+            document.getElementById('divergenceModal').addEventListener('click', function(e) {
+                if (e.target === this) closeModal();
+            });
+
+            // 键盘事件
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') closeModal();
+            });
+        });
+
+        // 加载数据
+        async function loadData() {
+            if (isLoading) return;
+
+            isLoading = true;
+            updateStatus('loading', '正在加载数据...');
+
+            try {
+                const response = await fetch('/api/stochrsi/overview/test');
+                const data = await response.json();
+
+                if (data.success) {
+                    currentData = data.data;
+                    renderTable();
+                    updateStatus('success', `数据更新完成 (${new Date().toLocaleTimeString()})`);
+                } else {
+                    throw new Error(data.message || '数据加载失败');
+                }
+            } catch (error) {
+                console.error('数据加载错误:', error);
+                updateStatus('error', '数据加载失败: ' + error.message);
+            } finally {
+                isLoading = false;
+            }
+        }
+
+        // 渲染表格
+        function renderTable() {
+            const tbody = document.getElementById('tableBody');
+            const symbols = ['BTC-USDT-SWAP', 'ETH-USDT-SWAP', 'SOL-USDT-SWAP'];
+            const timeframes = ['1W', '1D', '4H', '15m'];
+
+            let html = '';
+
+            symbols.forEach(fullSymbol => {
+                const symbolData = currentData[fullSymbol] || {};
+                const shortName = fullSymbol.split('-')[0];
+
+                html += '<tr>';
+                html += `<td class="symbol-cell">${shortName}</td>`;
+
+                timeframes.forEach(timeframe => {
+                    const data = symbolData[timeframe] || {};
+                    html += createCell(fullSymbol, shortName, timeframe, data);
+                });
+
+                html += '</tr>';
+            });
+
+            tbody.innerHTML = html;
+        }
+
+        // 创建数据单元格
+        function createCell(fullSymbol, shortName, timeframe, data) {
+            const stochrsi = data.latest_stochrsi !== null && data.latest_stochrsi !== undefined
+                ? data.latest_stochrsi.toFixed(2)
+                : 'N/A';
+
+            // 新增：波动率显示
+            let volatilityHtml = '';
+            if (data.volatility && data.volatility.current_volatility !== null) {
+                const vol = data.volatility.current_volatility;
+                const sigmaLevel = data.volatility.sigma_level || '';
+                const trend = data.volatility.trend || '';
+
+                // 根据σ水平设置颜色
+                let sigmaColor = '#27ae60'; // 默认绿色 (正常)
+                if (sigmaLevel === '3σ') {
+                    sigmaColor = '#e74c3c'; // 红色 (极端波动)
+                } else if (sigmaLevel === '2σ') {
+                    sigmaColor = '#f39c12'; // 橙色 (高波动)
+                } else if (sigmaLevel === '1σ') {
+                    sigmaColor = '#f39c12'; // 橙色 (中等波动)
+                }
+
+                // 根据趋势设置箭头
+                let trendIcon = '';
+                if (trend === 'increasing') {
+                    trendIcon = '📈';
+                } else if (trend === 'decreasing') {
+                    trendIcon = '📉';
+                }
+
+                volatilityHtml = `
+                    <div class="volatility-display" style="color: ${sigmaColor};">
+                        <span class="sigma-indicator">${sigmaLevel}</span>
+                        <span class="volatility-value">${vol.toFixed(2)}%</span>
+                        <span class="trend-indicator">${trendIcon}</span>
+                    </div>
+                `;
+            }
+
+            // 判断信号类型
+            let signal = null;
+            if (data.tbl_signal && data.tbl_signal.has_signal) {
+                signal = 'tbl';
+            } else if (data.dbl_signal && data.dbl_signal.has_signal) {
+                signal = 'dbl';
+            }
+
+            let signalHtml = '';
+            if (signal) {
+                signalHtml = `<span class="signal-badge ${signal}" onclick="event.stopPropagation(); showDivergence('${fullSymbol}', '${timeframe}')">${signal.toUpperCase()}</span>`;
+            }
+
+            return `<td class="timeframe-cell" onclick="showDivergence('${fullSymbol}', '${timeframe}')" style="cursor: pointer;">
+                ${signalHtml}
+                <div class="cell-content">
+                    <div class="stochrsi-value">${stochrsi}</div>
+                    ${volatilityHtml}
+                </div>
+            </td>`;
+        }
+
+        // 显示背离信号
+        async function showDivergence(symbol, timeframe) {
+            if (window.showDivergenceLoading) return;
+            window.showDivergenceLoading = true;
+
+            const modal = document.getElementById('divergenceModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const divergenceList = document.getElementById('divergenceList');
+
+            modalTitle.textContent = `${symbol.split('-')[0]} ${timeframe} 背离信号（最近20个）`;
+            divergenceList.innerHTML = '<li class="no-data">正在加载背离信号...</li>';
+
+            modal.classList.add('show');
+
+            try {
+                const response = await fetch(`/api/stochrsi/divergence/${symbol}/${timeframe}/test?limit=20`);
+                const result = await response.json();
+
+                if (result.success && result.divergences.length > 0) {
+                    divergenceList.innerHTML = result.divergences.map(signal => {
+                        // 波动率信息显示
+                        let volatilityHtml = '';
+                        if (signal.volatility && signal.volatility.current_volatility !== undefined) {
+                            const vol = signal.volatility;
+                            const sigmaColor = vol.sigma_level === '3σ' ? '#e74c3c' :
+                                              vol.sigma_level === '2σ' ? '#f39c12' : '#27ae60';
+                            const trendIcon = vol.trend === 'increasing' ? '📈' :
+                                             vol.trend === 'decreasing' ? '📉' : '';
+
+                            volatilityHtml = `
+                                <div class="volatility-info" style="margin-top: 0.5rem; padding: 0.5rem; background: #f8f9fa; border-radius: 4px; font-size: 0.8rem;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
+                                        <span style="font-weight: 500; color: #333;">波动率分析</span>
+                                        <span style="color: ${sigmaColor}; font-weight: 600;">${vol.sigma_level} ${vol.current_volatility.toFixed(2)}% ${trendIcon}</span>
+                                    </div>
+                                    ${vol.rolling_volatility !== null ? `
+                                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #666;">
+                                            <span>滚动波动率:</span>
+                                            <span>${vol.rolling_volatility.toFixed(2)}%</span>
+                                        </div>
+                                    ` : ''}
+                                    ${vol.historical_mean !== null ? `
+                                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #666;">
+                                            <span>历史均值:</span>
+                                            <span>${vol.historical_mean.toFixed(2)}% ±${vol.historical_std.toFixed(2)}%</span>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            `;
+                        }
+
+                        return `
+                            <li class="divergence-item ${signal.type.toLowerCase()}">
+                                <div class="divergence-content">
+                                    <span class="divergence-type ${signal.type.toLowerCase()}">${signal.type}</span>
+                                    <span class="divergence-time">${formatDateTime(signal.timestamp)}</span>
+                                    <span class="divergence-stochrsi">${signal.stochrsi !== null && signal.stochrsi !== undefined ? signal.stochrsi.toFixed(2) : 'N/A'}</span>
+                                    <span class="divergence-price">${signal.price !== null && signal.price !== undefined ? signal.price.toFixed(2) : 'N/A'}</span>
+                                    ${volatilityHtml}
+                                </div>
+                            </li>
+                        `;
+                    }).join('');
+                } else {
+                    divergenceList.innerHTML = '<li class="no-data">暂无背离信号数据</li>';
+                }
+            } catch (error) {
+                console.error('背离信号加载错误:', error);
+                divergenceList.innerHTML = '<li class="no-data">背离信号加载失败</li>';
+            } finally {
+                window.showDivergenceLoading = false;
+            }
+        }
+
+        // 关闭模态框
+        function closeModal() {
+            document.getElementById('divergenceModal').classList.remove('show');
+        }
+
+        // 切换自动刷新
+        function toggleAutoRefresh() {
+            const btn = document.getElementById('autoRefreshBtn');
+
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                btn.textContent = '⏰ 开启自动刷新';
+                btn.classList.remove('active');
+                updateStatus('success', '自动刷新已关闭');
+            } else {
+                autoRefreshInterval = setInterval(loadData, 30000); // 30秒刷新
+                btn.textContent = '⏸️ 关闭自动刷新';
+                btn.classList.add('active');
+                updateStatus('success', '自动刷新已开启 (30秒间隔)');
+            }
+        }
+
+        // 更新状态
+        function updateStatus(type, message) {
+            const status = document.getElementById('status');
+            status.className = `status ${type}`;
+            status.textContent = message;
+        }
+
+        // 格式化日期时间
+        function formatDateTime(timestamp) {
+            if (!timestamp) return 'N/A';
+
+            try {
+                const date = new Date(timestamp);
+                if (isNaN(date.getTime())) {
+                    // 如果不能直接解析，尝试其他格式
+                    return timestamp;
+                }
+
+                return date.toLocaleString('zh-CN', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+            } catch (error) {
+                return timestamp;
+            }
+        }
+    </script>
+</body>
+</html>

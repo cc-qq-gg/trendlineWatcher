@@ -1,0 +1,8 @@
+flask==2.3.3
+pandas==2.0.3
+ccxt==4.0.85
+numpy==1.24.3
+cryptography==41.0.7
+pycryptodome==3.18.0
+gunicorn==21.2.0
+gevent==23.9.1

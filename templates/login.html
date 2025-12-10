@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>趋势线监测系统 - 登录</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .login-container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+            backdrop-filter: blur(10px);
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .login-header h1 {
+            color: #333;
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .login-header p {
+            color: #666;
+            font-size: 16px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: white;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .form-group input::placeholder {
+            color: #aaa;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .alerts {
+            margin-bottom: 20px;
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-danger {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 14px;
+        }
+
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        /* 移动端适配 */
+        @media screen and (max-width: 480px) {
+            .login-container {
+                padding: 30px 20px;
+                margin: 10px;
+            }
+
+            .login-header h1 {
+                font-size: 24px;
+            }
+
+            .login-header p {
+                font-size: 14px;
+            }
+
+            .form-group input {
+                padding: 14px 16px;
+                font-size: 16px; /* 防止iOS自动缩放 */
+            }
+        }
+
+        /* Loading状态 */
+        .submit-btn.loading {
+            position: relative;
+            color: transparent;
+        }
+
+        .submit-btn.loading::after {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            top: 50%;
+            left: 50%;
+            margin-left: -10px;
+            margin-top: -10px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spinner 0.8s linear infinite;
+        }
+
+        @keyframes spinner {
+            to { transform: rotate(360deg); }
+        }
+
+        .security-info {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 20px;
+            font-size: 12px;
+            color: #6c757d;
+        }
+
+        .security-info .title {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1>🔐 趋势线监测系统</h1>
+            <p>请登录以继续访问</p>
+        </div>
+
+        <!-- 安全信息 -->
+        <div class="security-info">
+            <div class="title">🔒 安全特性</div>
+            <div>• 密码加密传输</div>
+            <div>• 登录失败限制（3次）</div>
+            <div>• 会话安全管理</div>
+        </div>
+
+        <!-- 消息提示 -->
+        <div class="alerts" id="alerts"></div>
+
+        <!-- 登录表单 -->
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" placeholder="请输入用户名" autocomplete="username">
+            </div>
+
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" placeholder="请输入密码" autocomplete="current-password">
+            </div>
+
+            <button type="submit" class="submit-btn" id="submitBtn">
+                登录
+            </button>
+        </form>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.1.1/crypto-js.min.js"></script>
+    <script>
+        // 登录失败计数
+        let loginAttempts = 0;
+
+        // 防抖变量
+        let isSubmitting = false;
+        let lastSubmitTime = 0;
+        const DEBOUNCE_DELAY = 2000; // 2秒防抖
+
+        // 生成随机密钥
+        function generateKey() {
+            const array = new Uint8Array(32);
+            crypto.getRandomValues(array);
+            return btoa(String.fromCharCode(...array));
+        }
+
+        // 加密数据 - 使用简单的XOR加密，与后端兼容
+        function encryptData(data, key) {
+            let result = '';
+            for (let i = 0; i < data.length; i++) {
+                const charCode = data.charCodeAt(i);
+                const keyChar = key.charCodeAt(i % key.length);
+                result += String.fromCharCode(charCode ^ keyChar);
+            }
+            // 转换为base64
+            return btoa(result);
+        }
+
+        // 显示消息
+        function showAlert(message, type = 'info') {
+            const alertsContainer = document.getElementById('alerts');
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type}`;
+
+            let icon = 'ℹ️';
+            if (type === 'success') icon = '✅';
+            else if (type === 'danger') icon = '❌';
+            else if (type === 'warning') icon = '⚠️';
+
+            alertDiv.innerHTML = `${icon} ${message}`;
+            alertsContainer.appendChild(alertDiv);
+
+            // 5秒后自动消失
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.parentNode.removeChild(alertDiv);
+                }
+            }, 5000);
+        }
+
+        // 清除所有消息
+        function clearAlerts() {
+            const alertsContainer = document.getElementById('alerts');
+            alertsContainer.innerHTML = '';
+        }
+
+        // 处理登录响应
+        function handleLoginResponse(data) {
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = false;
+            submitBtn.classList.remove('loading');
+
+            // 重置防抖状态
+            isSubmitting = false;
+
+            if (data.success) {
+                showAlert('登录成功，正在跳转...', 'success');
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 1000);
+            } else {
+                loginAttempts++;
+
+                if (data.message.includes('等待')) {
+                    showAlert(data.message, 'warning');
+                } else if (data.message.includes('剩余尝试次数')) {
+                    showAlert(data.message, 'warning');
+                } else {
+                    showAlert(data.message, 'danger');
+                }
+            }
+        }
+
+        // 表单提交处理
+        document.getElementById('loginForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const submitBtn = document.getElementById('submitBtn');
+
+            // 防抖检查
+            const currentTime = Date.now();
+            if (isSubmitting || (currentTime - lastSubmitTime < DEBOUNCE_DELAY)) {
+                if (isSubmitting) {
+                    showAlert('正在处理登录请求，请稍候...', 'info');
+                } else {
+                    const remainingTime = Math.ceil((DEBOUNCE_DELAY - (currentTime - lastSubmitTime)) / 1000);
+                    showAlert(`请等待${remainingTime}秒后再次尝试`, 'warning');
+                }
+                return;
+            }
+
+            // 基本验证
+            if (!username || !password) {
+                showAlert('请输入用户名和密码', 'warning');
+                return;
+            }
+
+            // 设置防抖状态
+            isSubmitting = true;
+            lastSubmitTime = currentTime;
+
+            // 显示加载状态
+            submitBtn.disabled = true;
+            submitBtn.classList.add('loading');
+            clearAlerts();
+
+            try {
+                // 生成加密密钥
+                const key = generateKey();
+
+                // 加密用户名和密码
+                const encryptedUsername = encryptData(username, key);
+                const encryptedPassword = encryptData(password, key);
+                const encryptedKey = btoa(key);
+
+                // 发送登录请求
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: encryptedUsername,
+                        password: encryptedPassword,
+                        key: encryptedKey
+                    })
+                });
+
+                const data = await response.json();
+                handleLoginResponse(data);
+
+            } catch (error) {
+                console.error('登录错误:', error);
+                submitBtn.disabled = false;
+                submitBtn.classList.remove('loading');
+                // 重置防抖状态
+                isSubmitting = false;
+                showAlert('网络错误，请重试', 'danger');
+            }
+        });
+
+        // 自动聚焦到第一个空输入框
+        document.addEventListener('DOMContentLoaded', function() {
+            const usernameInput = document.getElementById('username');
+            const passwordInput = document.getElementById('password');
+
+            if (!usernameInput.value) {
+                usernameInput.focus();
+            } else if (!passwordInput.value) {
+                passwordInput.focus();
+            }
+        });
+    </script>
+</body>
+</html>

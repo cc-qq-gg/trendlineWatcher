@@ -1,0 +1,31 @@
+__pycache__/
+.DS_Store
+**.csv
+CLAUDE.md
+
+# 配置文件 - 包含敏感信息
+config.py
+.env
+.env.local
+.env.production
+*.key
+*.pem
+
+# 敏感文件
+cookies.txt
+*.log
+logs/
+config*.py
+
+# IDE和编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 临时文件
+temp/
+tmp/
+*.tmp
+data/

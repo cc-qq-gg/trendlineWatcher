@@ -1,0 +1,1807 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title></title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 10px;
+        background-color: #f5f5f5;
+        /* 移动端优化 */
+        -webkit-text-size-adjust: 100%;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 0 10px;
+      }
+      .header {
+        text-align: center;
+        margin-bottom: 15px;
+      }
+      .header h1 {
+        font-size: 24px;
+        margin: 10px 0;
+      }
+      .main-content {
+        display: flex;
+        gap: 20px;
+        flex-direction: row;
+      }
+      .chart-container {
+        flex: 1;
+        background: white;
+        border-radius: 8px;
+        padding: 15px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        min-width: 0; /* 防止flex子项溢出 */
+      }
+      #chart {
+        width: 100%;
+      }
+      .sidebar {
+        width: 380px;
+        background: white;
+        border-radius: 8px;
+        padding: 15px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        flex-shrink: 0;
+        overflow-y: auto;
+        max-height: calc(100vh - 120px);
+      }
+      .controls {
+        margin-bottom: 15px;
+      }
+      .controls-row {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+      }
+      .controls select,
+      .controls button {
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 14px;
+        min-height: 44px; /* 移动端推荐的触摸目标最小尺寸 */
+        box-sizing: border-box;
+      }
+      .controls select {
+        flex: 1;
+        min-width: 150px;
+      }
+      .controls button {
+        background-color: #4caf50;
+        color: white;
+        cursor: pointer;
+        transition: background-color 0.2s;
+        min-width: 100px;
+        font-weight: 500;
+      }
+      .controls button:hover {
+        background-color: #45a049;
+      }
+      .controls button:active {
+        background-color: #3d8b40;
+        transform: translateY(1px);
+      }
+      .controls button:disabled {
+        background-color: #cccccc;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .controls button.secondary {
+        background-color: #2196f3;
+      }
+      .controls button.secondary:hover {
+        background-color: #1976d2;
+      }
+      .controls button.danger {
+        background-color: #f44336;
+      }
+      .controls button.danger:hover {
+        background-color: #d32f2f;
+      }
+      .trendlines-list {
+        max-height: 600px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch; /* 移动端滚动优化 */
+      }
+      .trendline-item {
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 12px;
+        background-color: #f9f9f9;
+        transition: box-shadow 0.2s;
+      }
+      .trendline-item:hover {
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      }
+      .trendline-item h4 {
+        margin: 0 0 8px 0;
+        color: #333;
+        font-size: 14px;
+        word-break: break-all;
+      }
+      .trendline-item p {
+        margin: 5px 0;
+        font-size: 13px;
+        color: #666;
+        line-height: 1.4;
+      }
+      .trendline-item .actions {
+        margin-top: 12px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .trendline-item button {
+        padding: 8px 12px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        min-height: 36px;
+        transition: transform 0.1s, opacity 0.2s;
+        font-weight: 500;
+      }
+      .trendline-item button:active {
+        transform: scale(0.95);
+      }
+      .btn-delete {
+        background-color: #f44336;
+        color: white;
+      }
+      .btn-delete:hover {
+        background-color: #d32f2f;
+      }
+      .btn-toggle {
+        background-color: #2196f3;
+        color: white;
+      }
+      .btn-toggle:hover {
+        background-color: #1976d2;
+      }
+      .btn-edit {
+        background-color: #ff9800;
+        color: white;
+      }
+      .btn-edit:hover {
+        background-color: #f57c00;
+      }
+      .btn-check {
+        background-color: #9c27b0;
+        color: white;
+      }
+      .btn-check:hover {
+        background-color: #7b1fa2;
+      }
+      .btn-chart-edit {
+        background-color: #607d8b;
+        color: white;
+        flex: 1;
+        min-width: 80px;
+      }
+      .btn-chart-edit:hover {
+        background-color: #455a64;
+      }
+      .status {
+        padding: 10px;
+        margin-top: 20px;
+        border-radius: 4px;
+        text-align: center;
+      }
+      .status.success {
+        background-color: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }
+      .status.error {
+        background-color: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+      }
+      #dataInfo {
+        font-size: 12px;
+        color: #666;
+        background-color: #f8f9fa;
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid #dee2e6;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 300px;
+      }
+      .demo-info {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 8px;
+        margin-top: 20px;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+      }
+      .demo-info h4 {
+        margin: 0 0 10px 0;
+        font-size: 16px;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+        padding-bottom: 5px;
+      }
+      .demo-features {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+      }
+      .demo-feature {
+        background: rgba(255, 255, 255, 0.1);
+        padding: 8px;
+        border-radius: 5px;
+        font-size: 12px;
+      }
+      .coordinate-demo {
+        display: none;
+        background: rgba(255, 255, 255, 0.15);
+        border-left: 4px solid #ffd700;
+        padding: 10px;
+        margin-top: 10px;
+        border-radius: 0 5px 5px 0;
+      }
+
+      /* Loading遮罩样式 */
+      .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.2);
+        display: none;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+        backdrop-filter: blur(2px);
+      }
+
+      .spinner {
+        width: 40px;
+        height: 40px;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+
+      /* 平板适配 (768px - 1024px) */
+      @media screen and (max-width: 1024px) {
+        .container {
+          padding: 0 15px;
+        }
+        .sidebar {
+          width: 320px;
+        }
+        #chart {
+        }
+        .trendline-item .actions {
+          gap: 4px;
+        }
+        .trendline-item button {
+          padding: 6px 8px;
+          font-size: 11px;
+          min-height: 32px;
+        }
+      }
+
+      /* 移动端适配 (小于768px) */
+      @media screen and (max-width: 768px) {
+        body {
+          padding: 5px;
+        }
+        .container {
+          padding: 0 15px;
+        }
+        .header {
+          margin-bottom: 10px;
+        }
+        .header h1 {
+          font-size: 20px;
+        }
+
+        /* 改变布局为垂直排列 */
+        .main-content {
+          flex-direction: column;
+          gap: 15px;
+        }
+
+        .chart-container {
+          padding: 10px;
+        }
+        #chart {
+        }
+
+        .sidebar {
+          box-sizing: border-box;
+          width: 100%;
+          max-height: 50vh;
+          padding: 10px;
+        }
+
+        .controls {
+          margin-bottom: 10px;
+        }
+        .controls-row {
+          flex-direction: column;
+          gap: 8px;
+        }
+        .controls select,
+        .controls button {
+          min-height: 44px;
+          font-size: 16px; /* 防止iOS缩放 */
+        }
+
+        .trendlines-list {
+          max-height: 40vh;
+        }
+        .trendline-item {
+          padding: 8px;
+          margin-bottom: 8px;
+        }
+        .trendline-item h4 {
+          font-size: 13px;
+        }
+        .trendline-item p {
+          font-size: 12px;
+        }
+        .trendline-item .actions {
+          gap: 3px;
+          margin-top: 8px;
+        }
+        .trendline-item button {
+          padding: 6px 8px;
+          font-size: 11px;
+          min-height: 32px;
+          flex: 1;
+          min-width: 60px;
+        }
+      }
+
+      /* 小屏手机适配 (小于480px) */
+      @media screen and (max-width: 480px) {
+        .header h1 {
+          font-size: 18px;
+        }
+        .chart-container {
+          padding: 8px;
+        }
+        #chart {
+        }
+        .sidebar {
+          padding: 8px;
+        }
+        .controls select,
+        .controls button {
+          font-size: 14px;
+          padding: 10px;
+        }
+        .trendline-item button {
+          font-size: 10px;
+          padding: 5px 6px;
+          min-height: 28px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Loading遮罩 -->
+    <div id="loadingOverlay" class="loading-overlay">
+      <svg class="spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12a9 9 0 1 1-6.219-8.56" stroke="#4caf50"/>
+      </svg>
+    </div>
+
+    <div class="container">
+      <div class="main-content">
+        <div class="chart-container">
+          <div class="controls">
+            <div class="controls-row">
+              <select id="symbolSelect">
+                {% for symbol in symbols %}
+                <option value="{{ symbol }}">{{ symbol }}</option>
+               {% endfor %}
+              </select>
+            </div>
+            <div class="controls-row">
+              <button id="refreshBtn">刷新数据</button>
+              <button id="drawTrendlineBtn">绘制趋势线</button>
+              <button
+                id="clearSelectionBtn"
+                class="secondary"
+                style="display: none"
+              >
+                取消选择
+              </button>
+            </div>
+            <div>
+              <span id="dataInfo" style="color: #666; font-size: 12px"></span>
+            </div>
+          </div>
+          <div id="chart"></div>
+        </div>
+
+        <div class="sidebar">
+          <div id="status" class="status" style="display: none"></div>
+          <div id="trendlinesList" class="trendlines-list">
+            <p>加载中...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let chart
+      let candlestickSeries
+      let trendlineSeries = []
+      let selectedPoints = []
+      let isDrawingMode = false
+      let isEditMode = false
+      let editingTrendlineId = null
+      let editingOriginalData = null
+      let currentSymbol = 'SOL-USDT-SWAP'
+      // 东八区
+      const timeZonetimes = 3600 * 8
+
+      // 初始化图表
+      function initChart() {
+        try {
+          const chartContainer = document.getElementById('chart')
+          chart = LightweightCharts.createChart(chartContainer, {
+            width: chartContainer.clientWidth,
+            height: 600,
+            layout: {
+              backgroundColor: '#ffffff',
+              textColor: '#333',
+            },
+            grid: {
+              vertLines: {
+                color: '#e0e0e0',
+              },
+              horzLines: {
+                color: '#e0e0e0',
+              },
+            },
+            crosshair: {
+              mode: LightweightCharts.CrosshairMode.Normal,
+            },
+            rightPriceScale: {
+              borderColor: '#cccccc',
+            },
+            timeScale: {
+              borderColor: '#cccccc',
+              timeVisible: true,
+              secondsVisible: false,
+            },
+          })
+
+          candlestickSeries = chart.addCandlestickSeries({
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderVisible: false,
+            wickUpColor: '#26a69a',
+            wickDownColor: '#ef5350',
+          })
+
+          // 十字线移动事件处理（用于获取价格数据）
+          chart.subscribeCrosshairMove(handleCrosshairMove)
+
+          // 点击事件处理
+          chart.subscribeClick(handleChartClick)
+
+          console.log('图表初始化成功')
+        } catch (error) {
+          console.error('图表初始化失败:', error)
+          showStatus('图表初始化失败: ' + error.message, 'error')
+        }
+      }
+
+      // 创建趋势线
+      function createTrendline() {
+        if (selectedPoints.length !== 2) return
+
+        const startPoint = selectedPoints[0]
+        const endPoint = selectedPoints[1]
+
+        // 计算趋势线方向（基于价格变化）
+        const direction = endPoint.price > startPoint.price ? 1 : -1
+        const directionText = direction === 1 ? '做多' : '做空'
+
+        // 生成趋势线名称
+        const trendlineName = `${directionText}_趋势线_${new Date().toLocaleTimeString()}`
+
+        const trendlineData = {
+          name: trendlineName,
+          symbol: currentSymbol,
+          startPoint: {
+            time: convertTimeToString(startPoint.time),
+            price: startPoint.price.toFixed(2),
+            priceInfo: startPoint.priceInfo
+              ? startPoint.priceInfo.description
+              : null,
+            candleData: startPoint.priceInfo
+              ? {
+                  open: startPoint.priceInfo.open,
+                  high: startPoint.priceInfo.high,
+                  low: startPoint.priceInfo.low,
+                  close: startPoint.priceInfo.close,
+                }
+              : null,
+          },
+          endPoint: {
+            time: convertTimeToString(endPoint.time),
+            price: endPoint.price.toFixed(2),
+            priceInfo: endPoint.priceInfo
+              ? endPoint.priceInfo.description
+              : null,
+            candleData: endPoint.priceInfo
+              ? {
+                  open: endPoint.priceInfo.open,
+                  high: endPoint.priceInfo.high,
+                  low: endPoint.priceInfo.low,
+                  close: endPoint.priceInfo.close,
+                }
+              : null,
+          },
+          direction: direction,
+        }
+
+        console.log('创建趋势线数据:', trendlineData)
+
+        showLoading()
+
+        fetch('/api/trendlines', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(trendlineData),
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            hideLoading()
+            if (data.success) {
+              showStatus('趋势线创建成功', 'success')
+              loadTrendlines()
+              drawExistingTrendlines() // 直接绘制新趋势线
+            } else {
+              showStatus(
+                '创建趋势线失败: ' + (data.message || '未知错误'),
+                'error'
+              )
+            }
+            clearSelection()
+          })
+          .catch((error) => {
+            hideLoading()
+            console.error('创建趋势线失败:', error)
+            showStatus('创建趋势线失败: ' + error.message, 'error')
+            clearSelection()
+          })
+      }
+
+      // 转换时间格式
+      function convertTimeToString(time) {
+        const date = new Date(time * 1000)
+        const year = date.getFullYear()
+        const month = String(date.getMonth() + 1).padStart(2, '0')
+        const day = String(date.getDate()).padStart(2, '0')
+        const hour = String(date.getHours()).padStart(2, '0')
+        const minute = String(date.getMinutes()).padStart(2, '0')
+        const second = String(date.getSeconds()).padStart(2, '0')
+        return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+      }
+
+      let validData = []
+
+      // 显示/隐藏Loading遮罩
+      function showLoading() {
+        const overlay = document.getElementById('loadingOverlay')
+        overlay.style.display = 'flex'
+      }
+
+      function hideLoading() {
+        const overlay = document.getElementById('loadingOverlay')
+        overlay.style.display = 'none'
+      }
+
+      // 加载K线数据
+      function loadKlineData() {
+        showLoading()
+
+        fetch(`/api/kline/${currentSymbol}?limit=2000`)
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error('Network response was not ok')
+            }
+            return response.json()
+          })
+          .then((data) => {
+            hideLoading()
+
+            console.log('收到数据:', data)
+            console.log('数据类型:', typeof data)
+            console.log('数据长度:', data.length)
+
+            if (data.error) {
+              showStatus('加载K线数据失败: ' + data.error, 'error')
+              return
+            }
+
+            if (!Array.isArray(data)) {
+              showStatus('数据格式错误：不是数组', 'error')
+              console.error('数据不是数组:', data)
+              return
+            }
+
+            if (data.length === 0) {
+              showStatus('暂无数据', 'error')
+              return
+            }
+            data?.forEach((candle) => {
+              candle.time = candle.time + timeZonetimes
+            })
+            data?.sort((a, b) => a.time - b.time)
+
+            // 验证所有数据，确保没有null值
+            validData = data.filter((candle) => {
+              return (
+                candle &&
+                typeof candle === 'object' &&
+                candle.time !== null &&
+                candle.time !== undefined &&
+                candle.open !== null &&
+                candle.open !== undefined &&
+                candle.high !== null &&
+                candle.high !== undefined &&
+                candle.low !== null &&
+                candle.low !== undefined &&
+                candle.close !== null &&
+                candle.close !== undefined &&
+                !isNaN(candle.time) &&
+                !isNaN(candle.open) &&
+                !isNaN(candle.high) &&
+                !isNaN(candle.low) &&
+                !isNaN(candle.close)
+              )
+            })
+
+            if (validData.length === 0) {
+              showStatus('没有有效的K线数据', 'error')
+              console.error('所有数据都无效')
+              return
+            }
+
+            if (validData.length < data.length) {
+              console.warn(
+                `过滤掉了 ${data.length - validData.length} 条无效数据`
+              )
+            }
+
+            console.log('有效数据条数:', validData.length)
+            console.log('第一条有效数据:', validData[0])
+
+            // 尝试设置数据，如果失败则显示错误
+            try {
+              candlestickSeries.setData(validData)
+              chart.timeScale().fitContent()
+              drawExistingTrendlines()
+              showStatus(`数据已更新 (${validData.length}条)`, 'success')
+              updateDataInfo(validData)
+            } catch (chartError) {
+              console.error('图表设置数据失败:', chartError)
+              console.error('错误详情:', chartError.message)
+              console.error('错误堆栈:', chartError.stack)
+
+              // 尝试获取更详细的错误信息
+              if (chartError.message.includes('null')) {
+                showStatus('数据包含null值，请检查数据格式', 'error')
+              } else {
+                showStatus('图表显示失败：' + chartError.message, 'error')
+              }
+            }
+          })
+          .catch((error) => {
+            hideLoading()
+            console.error('加载K线数据失败:', error)
+            showStatus('加载K线数据失败: ' + error.message, 'error')
+          })
+      }
+
+      // 加载趋势线列表
+      function loadTrendlines() {
+        showLoading()
+
+        return fetch(`/api/trendlines?symbol=${currentSymbol}`)
+          .then((response) => response.json())
+          .then((data) => {
+            hideLoading()
+            console.log('趋势线列表API响应:', data)
+            if (data && data.success && data.data) {
+              renderTrendlinesList(data.data)
+            } else {
+              console.error('趋势线数据格式错误:', data)
+              document.getElementById('trendlinesList').innerHTML =
+                '<p style="color: red;">趋势线数据格式错误</p>'
+            }
+          })
+          .catch((error) => {
+            hideLoading()
+            console.error('加载趋势线失败:', error)
+            document.getElementById('trendlinesList').innerHTML =
+              '<p style="color: red;">加载趋势线失败</p>'
+          })
+      }
+
+      // 渲染趋势线列表
+      function renderTrendlinesList(trendlines) {
+        const container = document.getElementById('trendlinesList')
+
+        console.log('所有趋势线:', trendlines)
+
+        if (trendlines.length === 0) {
+          container.innerHTML = '<p>暂无趋势线</p>'
+          return
+        }
+
+        container.innerHTML = trendlines
+          .map(
+            (tl) => `
+                <div class="trendline-item" data-id="${tl.id}">
+                    <h4>${tl.symbol}</h4>
+                    <p><strong>方向：</strong>${
+                      tl.direction === 1 ? '做多 📈' : '做空 📉'
+                    }</p>
+                    <p><strong>起点：</strong>${
+                      tl.startPoint.time
+                    } 价格：$${parseFloat(tl.startPoint.price).toFixed(2)}</p>
+                    ${
+                      tl.startPoint.priceInfo
+                        ? `<p style="font-size: 11px; color: #666; margin-left: 10px;">${tl.startPoint.priceInfo}</p>`
+                        : ''
+                    }
+                    <p><strong>终点：</strong>${
+                      tl.endPoint.time
+                    } 价格：$${parseFloat(tl.endPoint.price).toFixed(2)}</p>
+                    ${
+                      tl.endPoint.priceInfo
+                        ? `<p style="font-size: 11px; color: #666; margin-left: 10px;">${tl.endPoint.priceInfo}</p>`
+                        : ''
+                    }
+                    <p><strong>创建时间：</strong>${new Date(
+                      tl.createdAt
+                    ).toLocaleString()}<strong>更新时间：</strong>${new Date(
+                      tl.updatedAt
+                    ).toLocaleString()}</p>
+                    <p><strong>状态：</strong>${
+                      tl.enabled ? '启用 ✅' : '禁用 ❌'
+                    }</p>
+                    <div class="actions">
+                        <button class="btn-chart-edit" onclick="startEditTrendlineFromChart('${
+                          tl.id
+                        }')">图表编辑</button>
+                        <button class="btn-toggle" onclick="toggleTrendline('${
+                          tl.id
+                        }')">
+                            ${tl.enabled ? '禁用' : '启用'}
+                        </button>
+                        <button class="btn-edit" onclick="editTrendline('${
+                          tl.id
+                        }')">详细编辑</button>
+                        <button class="btn-delete" onclick="deleteTrendline('${
+                          tl.id
+                        }')">删除</button>
+                    </div>
+                </div>
+            `
+          )
+          .join('')
+      }
+
+      // 绘制现有趋势线
+      function drawExistingTrendlines() {
+        // 清除现有趋势线
+        trendlineSeries.forEach((series) => chart.removeSeries(series))
+        trendlineSeries = []
+
+        fetch(`/api/trendlines?symbol=${currentSymbol}`)
+          .then((response) => response.json())
+          .then((trendlines) => {
+            console.log('趋势线数据:', trendlines)
+            if (trendlines && trendlines.success && trendlines.data) {
+              trendlines.data
+                .filter((tl) => tl.enabled === true)
+                .forEach((tl) => {
+                  console.log('绘制趋势线:', tl)
+                  drawTrendlineOnChart(tl)
+                })
+            }
+          })
+          .catch((error) => {
+            console.error('加载趋势线失败:', error)
+          })
+      }
+
+      // 在图表上绘制趋势线
+      function drawTrendlineOnChart(trendline) {
+        try {
+          console.log('开始绘制趋势线:', trendline)
+
+          // 确定颜色：direction=1为多头（绿色），direction=-1为空头（红色）
+          const color = trendline.direction === 1 ? '#26a69a' : '#ef5350'
+
+          const lineSeries = chart.addLineSeries({
+            color: color,
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            // title: trendline.name,
+          })
+
+          // 获取当前K线数据
+          const klineData = candlestickSeries.data()
+          if (!klineData || klineData.length < 2) {
+            console.warn('K线数据不足，无法绘制趋势线')
+            return
+          }
+
+          // 转换趋势线时间为时间戳
+          const startTime =
+            new Date(trendline.startPoint.time).getTime() / 1000 + timeZonetimes
+          const endTime =
+            new Date(trendline.endPoint.time).getTime() / 1000 + timeZonetimes
+
+          const startPrice = parseFloat(trendline.startPoint.price)
+          const endPrice = parseFloat(trendline.endPoint.price)
+
+          console.log('趋势线数据:', {
+            startTime,
+            endTime,
+            startPrice,
+            endPrice,
+          })
+
+          // 计算趋势线斜率（基于Signals.py的逻辑）
+          const startIndex = klineData.findIndex((k) => k.time >= startTime)
+          const endIndex = klineData.findIndex((k) => k.time >= endTime)
+
+          if (startIndex === -1 || endIndex === -1) {
+            console.warn('趋势线时间超出K线数据范围')
+            return
+          }
+
+          // 计算斜率
+          const slope = (endPrice - startPrice) / (endIndex - startIndex)
+
+          // 生成趋势线数据点（从起点开始延伸到右侧）
+          const trendlineData = []
+          const firstKlineTime = klineData[0].time
+          const lastKlineTime = klineData[klineData.length - 1].time
+
+          // 从趋势线起点开始，延伸到K线数据的末尾
+          const extendStartTime = Math.max(startTime, firstKlineTime)
+          const extendEndTime = lastKlineTime
+
+          const startIdx = klineData.findIndex((k) => k.time >= extendStartTime)
+          if (startIdx === -1) return
+
+          for (let i = startIdx; i < klineData.length; i++) {
+            const currentTime = klineData[i].time
+            const relativeIndex = i - startIndex
+            const trendlineValue = startPrice + slope * relativeIndex
+
+            trendlineData.push({
+              time: currentTime,
+              value: trendlineValue,
+            })
+          }
+
+          console.log('设置趋势线数据点数:', trendlineData.length)
+          lineSeries.setData(trendlineData)
+
+          trendlineSeries.push(lineSeries)
+          console.log('趋势线绘制完成')
+        } catch (error) {
+          console.error('绘制趋势线失败:', error)
+        }
+      }
+
+      // 切换趋势线状态
+      function toggleTrendline(id) {
+        // 先获取当前趋势线状态
+        fetch(`/api/trendlines/${id}`)
+          .then((response) => response.json())
+          .then((trendlineData) => {
+            if (trendlineData && trendlineData.success && trendlineData.data) {
+              const currentEnabled = trendlineData.data.enabled
+              const newEnabled = !currentEnabled
+
+              // 更新状态
+              fetch(`/api/trendlines/${id}`, {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ enabled: newEnabled }),
+              })
+                .then((response) => response.json())
+                .then((data) => {
+                  if (data.error) {
+                    showStatus('操作失败: ' + data.error, 'error')
+                  } else {
+                    showStatus(
+                      `趋势线已${newEnabled ? '启用' : '禁用'}`,
+                      'success'
+                    )
+                    loadTrendlines()
+                    drawExistingTrendlines() // 重新绘制趋势线
+                  }
+                })
+            }
+          })
+          .catch((error) => {
+            console.error('获取趋势线状态失败:', error)
+            showStatus('操作失败', 'error')
+          })
+      }
+
+      // 编辑趋势线
+      function editTrendline(id) {
+        // 获取趋势线详情
+        fetch(`/api/trendlines/${id}`)
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.success && data.data) {
+              const trendline = data.data
+              showEditDialog(trendline)
+            } else {
+              showStatus('获取趋势线信息失败', 'error')
+            }
+          })
+          .catch((error) => {
+            console.error('获取趋势线信息失败:', error)
+            showStatus('获取趋势线信息失败', 'error')
+          })
+      }
+
+      // 显示编辑对话框
+      function showEditDialog(trendline) {
+        // 创建对话框HTML
+        const dialogHtml = `
+          <div id="editDialog" style="
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+          ">
+            <div style="
+              background: white;
+              padding: 20px;
+              border-radius: 8px;
+              width: 400px;
+              max-width: 90vw;
+              box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            ">
+              <h3 style="margin-top: 0; color: #333;">编辑趋势线</h3>
+<div style="margin-bottom: 15px;display:none">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">名称:</label>
+                <input type="text" id="editName" value="${
+                  trendline.name
+                }" style="
+                  width: 100%;
+                  padding: 8px;
+                  border: 1px solid #ddd;
+                  border-radius: 4px;
+                  box-sizing: border-box;
+                ">
+              </div>
+
+
+              <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">方向:</label>
+                <select id="editDirection" style="
+                  width: 100%;
+                  padding: 8px;
+                  border: 1px solid #ddd;
+                  border-radius: 4px;
+                  box-sizing: border-box;
+                ">
+                  <option value="1" ${
+                    trendline.direction === 1 ? 'selected' : ''
+                  }>做多 📈</option>
+                  <option value="-1" ${
+                    trendline.direction === -1 ? 'selected' : ''
+                  }>做空 📉</option>
+                </select>
+              </div>
+
+              <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">起点时间:</label>
+                <div style="display: flex; gap: 5px;">
+                  <input type="datetime-local" id="editStartTime" value="${convertToDateTimeLocal(
+                    trendline.startPoint.time
+                  )}" style="
+                    flex: 1;
+                    padding: 8px;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    box-sizing: border-box;
+                  ">
+                  <button type="button" onclick="setStartTimeToNow()" style="
+                    padding: 8px 12px;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    background: #f0f0f0;
+                    cursor: pointer;
+                    white-space: nowrap;
+                  ">现在</button>
+                </div>
+              </div>
+
+              <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">起点价格:</label>
+                <input type="number" id="editStartPrice" value="${parseFloat(
+                  trendline.startPoint.price
+                ).toFixed(2)}" step="0.01" style="
+                  width: 100%;
+                  padding: 8px;
+                  border: 1px solid #ddd;
+                  border-radius: 4px;
+                  box-sizing: border-box;
+                ">
+              </div>
+
+              <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">终点时间:</label>
+                <div style="display: flex; gap: 5px;">
+                  <input type="datetime-local" id="editEndTime" value="${convertToDateTimeLocal(
+                    trendline.endPoint.time
+                  )}" style="
+                    flex: 1;
+                    padding: 8px;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    box-sizing: border-box;
+                  ">
+                  <button type="button" onclick="setEndTimeToNow()" style="
+                    padding: 8px 12px;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    background: #f0f0f0;
+                    cursor: pointer;
+                    white-space: nowrap;
+                  ">现在</button>
+                </div>
+              </div>
+
+              <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">终点价格:</label>
+                <input type="number" id="editEndPrice" value="${parseFloat(
+                  trendline.endPoint.price
+                ).toFixed(2)}" step="0.01" style="
+                  width: 100%;
+                  padding: 8px;
+                  border: 1px solid #ddd;
+                  border-radius: 4px;
+                  box-sizing: border-box;
+                ">
+              </div>
+
+              <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button onclick="closeEditDialog()" style="
+                  padding: 8px 16px;
+                  border: 1px solid #ddd;
+                  border-radius: 4px;
+                  background: #f5f5f5;
+                  cursor: pointer;
+                ">取消</button>
+                <button onclick="saveTrendlineEdit('${trendline.id}')" style="
+                  padding: 8px 16px;
+                  border: none;
+                  border-radius: 4px;
+                  background: #4caf50;
+                  color: white;
+                  cursor: pointer;
+                ">保存</button>
+              </div>
+            </div>
+          </div>
+        `
+
+        // 添加对话框到页面
+        document.body.insertAdjacentHTML('beforeend', dialogHtml)
+      }
+
+      // 转换时间格式为datetime-local格式
+      function convertToDateTimeLocal(timeString) {
+        try {
+          const date = new Date(timeString)
+          const year = date.getFullYear()
+          const month = String(date.getMonth() + 1).padStart(2, '0')
+          const day = String(date.getDate()).padStart(2, '0')
+          const hours = String(date.getHours()).padStart(2, '0')
+          const minutes = String(date.getMinutes()).padStart(2, '0')
+          return `${year}-${month}-${day}T${hours}:${minutes}`
+        } catch (e) {
+          console.error('时间格式转换失败:', e)
+          return ''
+        }
+      }
+
+      // 设置起点时间为当前时间
+      function setStartTimeToNow() {
+        const now = new Date()
+        const year = now.getFullYear()
+        const month = String(now.getMonth() + 1).padStart(2, '0')
+        const day = String(now.getDate()).padStart(2, '0')
+        const hours = String(now.getHours()).padStart(2, '0')
+        const minutes = String(now.getMinutes()).padStart(2, '0')
+        const dateTimeLocal = `${year}-${month}-${day}T${hours}:${minutes}`
+        document.getElementById('editStartTime').value = dateTimeLocal
+      }
+
+      // 设置终点时间为当前时间
+      function setEndTimeToNow() {
+        const now = new Date()
+        const year = now.getFullYear()
+        const month = String(now.getMonth() + 1).padStart(2, '0')
+        const day = String(now.getDate()).padStart(2, '0')
+        const hours = String(now.getHours()).padStart(2, '0')
+        const minutes = String(now.getMinutes()).padStart(2, '0')
+        const dateTimeLocal = `${year}-${month}-${day}T${hours}:${minutes}`
+        document.getElementById('editEndTime').value = dateTimeLocal
+      }
+
+      // 关闭编辑对话框
+      function closeEditDialog() {
+        const dialog = document.getElementById('editDialog')
+        if (dialog) {
+          dialog.remove()
+        }
+      }
+
+      // 添加对话框事件监听（点击外部关闭）
+      document.addEventListener('click', function (event) {
+        const dialog = document.getElementById('editDialog')
+        if (dialog && event.target === dialog) {
+          closeEditDialog()
+        }
+      })
+
+      // 添加ESC键关闭对话框
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+          const dialog = document.getElementById('editDialog')
+          if (dialog) {
+            closeEditDialog()
+          }
+        }
+      })
+
+      // 保存趋势线编辑
+      function saveTrendlineEdit(id) {
+        const name = document.getElementById('editName').value.trim()
+        const direction = parseInt(
+          document.getElementById('editDirection').value
+        )
+        const startTime = document.getElementById('editStartTime').value
+        const startPrice = parseFloat(
+          document.getElementById('editStartPrice').value
+        )
+        const endTime = document.getElementById('editEndTime').value
+        const endPrice = parseFloat(
+          document.getElementById('editEndPrice').value
+        )
+
+        // 验证输入
+        if (!name) {
+          showStatus('趋势线名称不能为空', 'error')
+          return
+        }
+
+        if (!startTime || !endTime) {
+          showStatus('请选择起点和终点时间', 'error')
+          return
+        }
+
+        if (isNaN(startPrice) || isNaN(endPrice)) {
+          showStatus('请输入有效的价格', 'error')
+          return
+        }
+
+        if (startPrice <= 0 || endPrice <= 0) {
+          showStatus('价格必须大于0', 'error')
+          return
+        }
+
+        // 转换时间格式
+        const startTimeString = convertDateTimeLocalToString(startTime)
+        const endTimeString = convertDateTimeLocalToString(endTime)
+
+        // 验证时间顺序
+        const startDate = new Date(startTime)
+        const endDate = new Date(endTime)
+        if (startDate >= endDate) {
+          showStatus('终点时间必须晚于起点时间', 'error')
+          return
+        }
+
+        // 构建更新数据
+        const updateData = {
+          name: name,
+          direction: direction,
+          startPoint: {
+            time: startTimeString,
+            price: startPrice.toFixed(2),
+          },
+          endPoint: {
+            time: endTimeString,
+            price: endPrice.toFixed(2),
+          },
+        }
+
+        console.log('更新趋势线数据:', updateData)
+
+        // 发送更新请求
+        fetch(`/api/trendlines/${id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updateData),
+        })
+          .then((response) => response.json())
+          .then((result) => {
+            if (result.success) {
+              showStatus('趋势线更新成功', 'success')
+              closeEditDialog()
+              loadTrendlines()
+              drawExistingTrendlines()
+            } else {
+              showStatus('更新失败: ' + (result.message || '未知错误'), 'error')
+            }
+          })
+          .catch((error) => {
+            console.error('更新趋势线失败:', error)
+            showStatus('更新失败: ' + error.message, 'error')
+          })
+      }
+
+      // 转换datetime-local格式为字符串
+      function convertDateTimeLocalToString(dateTimeLocal) {
+        try {
+          const date = new Date(dateTimeLocal)
+          const year = date.getFullYear()
+          const month = String(date.getMonth() + 1).padStart(2, '0')
+          const day = String(date.getDate()).padStart(2, '0')
+          const hour = String(date.getHours()).padStart(2, '0')
+          const minute = String(date.getMinutes()).padStart(2, '0')
+          const second = String(date.getSeconds()).padStart(2, '0')
+          return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+        } catch (e) {
+          console.error('时间格式转换失败:', e)
+          return ''
+        }
+      }
+
+      // 从图表开始编辑趋势线
+      function startEditTrendlineFromChart(id) {
+        // 获取趋势线信息
+        fetch(`/api/trendlines/${id}`)
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.success && data.data) {
+              const trendline = data.data
+              editingTrendlineId = id
+              editingOriginalData = trendline
+
+              // 进入编辑模式
+              isEditMode = true
+              selectedPoints = []
+
+              // 更新UI显示
+              document.getElementById('drawTrendlineBtn').style.display = 'none'
+              document.getElementById('clearSelectionBtn').style.display =
+                'inline-block'
+              document.getElementById('clearSelectionBtn').textContent =
+                '取消编辑'
+
+              showStatus(
+                `请点击图表选择新的趋势线起点，或点击取消保留原值`,
+                'success'
+              )
+            } else {
+              showStatus('获取趋势线信息失败', 'error')
+            }
+          })
+          .catch((error) => {
+            console.error('获取趋势线信息失败:', error)
+            showStatus('获取趋势线信息失败', 'error')
+          })
+      }
+
+      // 全局变量存储当前鼠标位置的价格
+      let currentHoverPrice = null
+
+      // 处理十字线移动事件，用于获取准确的价格
+      function handleCrosshairMove(param) {
+        if (!param.time || !param.point || !candlestickSeries) return
+
+        // 尝试从seriesPrices获取价格
+        if (
+          param.seriesPrices &&
+          param.seriesPrices.has &&
+          param.seriesPrices.has(candlestickSeries)
+        ) {
+          currentHoverPrice = param.seriesPrices.get(candlestickSeries)
+        } else if (param.seriesData && param.seriesData.candlestick) {
+          // 尝试从seriesData获取价格
+          const candleData = param.seriesData.candlestick
+          currentHoverPrice =
+            candleData.close ||
+            candleData.open ||
+            (candleData.high + candleData.low) / 2
+        } else {
+          // 使用鼠标Y坐标对应的价格（近似值）
+          currentHoverPrice = null
+        }
+      }
+
+      // 处理图表点击事件（支持绘制和编辑模式）
+      function handleChartClick(param) {
+        // 始终显示坐标信息（demo功能）
+        showClickCoordinates(param)
+
+        if (!isDrawingMode && !isEditMode) return
+
+        // 确保图表和系列已初始化
+        if (!chart || !candlestickSeries) {
+          console.warn('图表或系列未初始化')
+          return
+        }
+
+        if (!param.time || !param.point) return
+
+        // 获取点击位置的具体价格
+        let clickPrice = null
+        let priceData = null
+
+        // 如果点击到具体的K线数据点，使用点击位置的价格
+        if (param.seriesData && param.seriesData.size > 0) {
+          priceData = param.seriesData.get(candlestickSeries)
+        }
+
+        // 使用coordinateToPrice获取点击位置的精确价格
+        if (param.point && param.point.y) {
+          clickPrice = candlestickSeries.coordinateToPrice(param.point.y)
+        }
+
+        // 如果仍然没有获取到价格，显示错误
+        if (!clickPrice || isNaN(clickPrice)) {
+          console.warn('无法获取价格数据')
+          showStatus('无法获取价格数据，请重试', 'error')
+          return
+        }
+
+        // 保存点击价格信息
+        let clickPriceInfo = {}
+
+        // 获取详细的价格信息
+        if (priceData) {
+          // 如果点击到K线，显示K线信息和点击价格
+          clickPriceInfo = {
+            // clickPrice: clickPrice,
+            // open: priceData.open,
+            // high: priceData.high,
+            // low: priceData.low,
+            // close: priceData.close,
+            // description: `点击价格: ${clickPrice.toFixed(2)} | K线信息 - 开: ${
+            // priceData.open
+            // } | 高: ${priceData.high} | 低: ${priceData.low} | 收: ${
+            // priceData.close
+            // }`,
+          }
+        } else {
+          // 如果没有点击到K线，只显示点击位置的价格
+          clickPriceInfo = {
+            clickPrice: clickPrice,
+            description: `点击位置价格: ${clickPrice.toFixed(2)}`,
+          }
+        }
+
+        selectedPoints.push({
+          time: param.time - 8 * 3600,
+          price: clickPrice,
+          x: param.point.x,
+          y: param.point.y,
+          priceInfo: clickPriceInfo,
+        })
+
+        // 处理点击后的逻辑
+        if (isEditMode) {
+          if (selectedPoints.length === 1) {
+            showStatus('已选择新起点，请点击终点', 'success')
+          } else if (selectedPoints.length === 2) {
+            updateTrendlineFromChart()
+          }
+        } else {
+          if (selectedPoints.length === 1) {
+            showStatus('已选择起点，请点击终点', 'success')
+          } else if (selectedPoints.length === 2) {
+            createTrendline()
+          }
+        }
+      }
+
+      // 显示点击坐标信息（Demo功能）- 完全按照tt.html实现
+      function showClickCoordinates(param) {
+        if (!param || !param.point || !chart) return
+
+        const pixelX = param.point.x
+        const pixelY = param.point.y
+
+        // 按照tt.html的逻辑处理
+        if (param.point && param.time) {
+          // 显示时间 - 完全按照tt.html的方式
+          const date = new Date((param.time - 8 * 3600) * 1000)
+          const timeStr =
+            date.toLocaleDateString('zh-CN') +
+            ' ' +
+            date.toLocaleTimeString('zh-CN')
+
+          // 显示Y轴对应的价格 - 按照tt.html的方式
+          const time = chart.timeScale().coordinateToTime(param.point.x)
+          const price = candlestickSeries.coordinateToPrice(param.point.y)
+
+          let priceInfo = ''
+          console.log('点击价格', price, '点击时间', time, date, timeStr)
+
+          // 如果点击到具体的K线数据点，显示详细信息
+          if (param.seriesData && param.seriesData.size > 0) {
+            const priceData = param.seriesData.get(candlestickSeries)
+            // if (priceData) {
+            // priceInfo = `点击价格: ${price.toFixed(2)} | 开: ${
+            // priceData.open
+            // } | 高: ${priceData.high} | 低: ${priceData.low} | 收: ${
+            // priceData.close
+            // }`
+            // }
+          } else {
+            // 如果没有点击到K线，只显示点击位置的价格
+            priceInfo = `点击位置价格: ${price.toFixed(2)}`
+          }
+
+          // 更新页面上的坐标显示
+          updateCoordinateDisplay(
+            pixelX,
+            pixelY,
+            timeStr,
+            priceInfo,
+            param.time,
+            price
+          )
+        } else if (!param.point) {
+          updateCoordinateDisplay(pixelX, pixelY, '请点击图表', '-', null, null)
+        }
+      }
+
+      // 更新页面坐标显示 - 完全按照tt.html风格
+      function updateCoordinateDisplay(
+        pixelX,
+        pixelY,
+        timeStr,
+        priceInfo,
+        axisTime,
+        axisPrice
+      ) {
+        let coordDiv = document.getElementById('coordinate-display')
+        if (!coordDiv) {
+          // 创建坐标显示区域
+          coordDiv = document.createElement('div')
+          coordDiv.id = 'coordinate-display'
+          coordDiv.style.cssText = `
+            display: none;
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: #2a2e39;
+            color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            z-index: 1000;
+            min-width: 320px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            border: 1px solid rgba(255,255,255,0.1);
+          `
+          document.body.appendChild(coordDiv)
+        }
+
+        coordDiv.innerHTML = `
+          <div style="margin-bottom: 15px;">
+            <span style="color: #888; display: inline-block; width: 80px;">像素坐标:</span>
+            <span style="color: #2962ff; font-weight: bold;">(${pixelX.toFixed(
+              1
+            )}, ${pixelY.toFixed(1)})</span>
+          </div>
+          <div style="margin-bottom: 15px;">
+            <span style="color: #888; display: inline-block; width: 80px;">时间:</span>
+            <span style="color: #2962ff; font-weight: bold;">${timeStr}</span>
+          </div>
+          <div>
+            <span style="color: #888; display: inline-block; width: 80px;">价格信息:</span>
+            <span style="color: #2962ff; font-weight: bold; word-break: break-all;">${priceInfo}</span>
+          </div>
+        `
+      }
+
+      // 从图表选择更新趋势线
+      function updateTrendlineFromChart() {
+        if (selectedPoints.length !== 2 || !editingTrendlineId) return
+
+        const startPoint = selectedPoints[0]
+        const endPoint = selectedPoints[1]
+
+        // 计算新的方向（基于价格变化）
+        const newDirection = endPoint.price > startPoint.price ? 1 : -1
+
+        // 构建更新数据
+        const updateData = {
+          name: editingOriginalData.name,
+          direction: newDirection,
+          startPoint: {
+            time: convertTimeToString(startPoint.time),
+            price: startPoint.price.toFixed(2),
+            priceInfo: startPoint.priceInfo
+              ? startPoint.priceInfo.description
+              : null,
+            candleData: startPoint.priceInfo
+              ? {
+                  open: startPoint.priceInfo.open,
+                  high: startPoint.priceInfo.high,
+                  low: startPoint.priceInfo.low,
+                  close: startPoint.priceInfo.close,
+                }
+              : null,
+          },
+          endPoint: {
+            time: convertTimeToString(endPoint.time),
+            price: endPoint.price.toFixed(2),
+            priceInfo: endPoint.priceInfo
+              ? endPoint.priceInfo.description
+              : null,
+            candleData: endPoint.priceInfo
+              ? {
+                  open: endPoint.priceInfo.open,
+                  high: endPoint.priceInfo.high,
+                  low: endPoint.priceInfo.low,
+                  close: endPoint.priceInfo.close,
+                }
+              : null,
+          },
+        }
+
+        console.log('从图表更新趋势线:', updateData)
+
+        // 发送更新请求
+        fetch(`/api/trendlines/${editingTrendlineId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updateData),
+        })
+          .then((response) => response.json())
+          .then((result) => {
+            if (result.success) {
+              showStatus('趋势线从图表更新成功', 'success')
+              exitEditMode()
+              loadTrendlines()
+              drawExistingTrendlines()
+            } else {
+              showStatus('更新失败: ' + (result.message || '未知错误'), 'error')
+            }
+          })
+          .catch((error) => {
+            console.error('更新趋势线失败:', error)
+            showStatus('更新失败: ' + error.message, 'error')
+          })
+      }
+
+      // 退出编辑模式
+      function exitEditMode() {
+        isEditMode = false
+        editingTrendlineId = null
+        editingOriginalData = null
+        clearSelection()
+
+        // 恢复按钮状态
+        document.getElementById('drawTrendlineBtn').style.display =
+          'inline-block'
+        document.getElementById('clearSelectionBtn').textContent = '取消选择'
+      }
+
+      // 更新清除选择功能
+      function clearSelection() {
+        selectedPoints = []
+        isDrawingMode = false
+
+        if (isEditMode) {
+          exitEditMode()
+        } else {
+          document.getElementById('drawTrendlineBtn').style.display =
+            'inline-block'
+          document.getElementById('clearSelectionBtn').style.display = 'none'
+        }
+      }
+
+      // 检查趋势线突破
+      function checkTrendlineBreakout(id) {
+        showStatus('正在检查突破信号...', 'success')
+
+        fetch(`/api/trendlines/${id}/check`, {
+          method: 'POST',
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.success) {
+              const result = data.data
+              console.log('突破检测结果:', result)
+
+              if (result.breakout_signal === 1) {
+                showStatus('🚨 检测到向上突破信号！', 'success')
+              } else if (result.breakout_signal === -1) {
+                showStatus('🚨 检测到向下跌破信号！', 'error')
+              } else {
+                showStatus('暂无突破信号', 'success')
+              }
+
+              // 显示详细信息
+              if (result.current_price && result.trendline_value) {
+                console.log(
+                  `当前价格: ${result.current_price}, 趋势线值: ${result.trendline_value}`
+                )
+              }
+            } else {
+              showStatus('检查失败: ' + (data.message || '未知错误'), 'error')
+            }
+          })
+          .catch((error) => {
+            console.error('检查突破失败:', error)
+            showStatus('检查突破失败: ' + error.message, 'error')
+          })
+      }
+
+      // 删除趋势线
+      function deleteTrendline(id) {
+        if (!confirm('确定要删除这条趋势线吗？')) return
+
+        fetch(`/api/trendlines/${id}`, {
+          method: 'DELETE',
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.success) {
+              showStatus('删除成功', 'success')
+              loadTrendlines()
+              drawExistingTrendlines()
+            } else {
+              showStatus('删除失败: ' + (data.message || '未知错误'), 'error')
+            }
+          })
+          .catch((error) => {
+            console.error('删除趋势线失败:', error)
+            showStatus('删除失败: ' + error.message, 'error')
+          })
+      }
+
+      // 清除选择
+      function clearSelection() {
+        selectedPoints = []
+        isDrawingMode = false
+        document.getElementById('drawTrendlineBtn').style.display =
+          'inline-block'
+        document.getElementById('clearSelectionBtn').style.display = 'none'
+      }
+
+      // 显示状态信息
+      function showStatus(message, type) {
+        // const status = document.getElementById('status')
+        // status.textContent = message
+        // status.className = 'status ' + type
+        // status.style.display = 'block'
+        // setTimeout(() => {
+        // status.style.display = 'none'
+        // }, 3000)
+      }
+
+      // 更新数据信息显示
+      function updateDataInfo(data) {
+        const dataInfo = document.getElementById('dataInfo')
+        if (data && data.length > 0) {
+          const firstTime = new Date(data[0].time * 1000)
+          const lastTime = new Date(data[data.length - 1].time * 1000)
+          dataInfo.textContent = `${
+            data.length
+          }条K线 | ${firstTime.toLocaleDateString()} ${firstTime.toLocaleTimeString()} - ${lastTime.toLocaleDateString()} ${lastTime.toLocaleTimeString()}`
+        } else {
+          dataInfo.textContent = '暂无数据'
+        }
+      }
+
+      // 事件监听
+      document
+        .getElementById('symbolSelect')
+        .addEventListener('change', (e) => {
+          currentSymbol = e.target.value
+
+          // 清除选择状态
+          clearSelection()
+
+          // 加载新币种的数据
+          loadKlineData()
+
+          // 重新加载该币种的趋势线
+          loadTrendlines()
+        })
+
+      document
+        .getElementById('refreshBtn')
+        .addEventListener('click', loadKlineData)
+
+      document
+        .getElementById('drawTrendlineBtn')
+        .addEventListener('click', () => {
+          isDrawingMode = true
+          selectedPoints = []
+          document.getElementById('drawTrendlineBtn').style.display = 'none'
+          document.getElementById('clearSelectionBtn').style.display =
+            'inline-block'
+          showStatus('请点击图表选择趋势线起点', 'success')
+        })
+
+      document
+        .getElementById('clearSelectionBtn')
+        .addEventListener('click', clearSelection)
+
+      // 初始化
+      window.addEventListener('load', () => {
+        showLoading()
+        initChart()
+        loadTrendlines().finally(() => {
+          loadKlineData()
+        })
+      })
+
+      // 响应式调整
+      window.addEventListener('resize', () => {
+        chart.applyOptions({
+          width: document.getElementById('chart').clientWidth,
+        })
+      })
+    </script>
+  </body>
+</html>
