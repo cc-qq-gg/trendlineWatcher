@@ -29,3 +29,7 @@ temp/
 tmp/
 *.tmp
 data/
+
+pm2 start python --name "monitor" -- TrendlineMonitor.py
+pm2 start python --name "web" -- TrendlineWebApp.py
+pm2 start python --name "watcher_stochrsi" -- watcher_stochrsi.py

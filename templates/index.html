@@ -625,7 +625,7 @@
       function loadKlineData() {
         showLoading()
 
-        fetch(`/api/kline/${currentSymbol}?limit=2000`)
+        return fetch(`/api/kline/${currentSymbol}?limit=2000`)
           .then((response) => {
             if (!response.ok) {
               throw new Error('Network response was not ok')
@@ -1762,10 +1762,11 @@
           clearSelection()
 
           // 加载新币种的数据
-          loadKlineData()
+          loadKlineData().finally(() => {
+            // 重新加载该币种的趋势线
+            loadTrendlines()
+          })
 
-          // 重新加载该币种的趋势线
-          loadTrendlines()
         })
 
       document
