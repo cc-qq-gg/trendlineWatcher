@@ -899,13 +899,14 @@ def get_kline_data(symbol):
                     low_price <= min(open_price, high_price, close_price) and
                     all(price > 0 for price in [open_price, high_price, low_price, close_price])):
 
-                    kline_data.append({
-                        'time': timestamp,
-                        'open': open_price,
-                        'high': high_price,
-                        'low': low_price,
-                        'close': close_price
-                    })
+                    # kline_data.append({
+                    #     'time': timestamp,
+                    #     'open': open_price,
+                    #     'high': high_price,
+                    #     'low': low_price,
+                    #     'close': close_price
+                    # })
+                    kline_data.append(f'{open_price},{high_price},{low_price},{close_price},{timestamp}')
             except Exception as e:
                 print(f"跳过无效数据行: {e}, 行数据: {row.to_dict()}")
                 continue

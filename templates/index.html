@@ -654,6 +654,17 @@
               showStatus('暂无数据', 'error')
               return
             }
+            // {open_price},{high_price},{low_price},{close_price},{timestamp}
+            data = data.map(i => {
+              const parts = i.split(',')
+              return {
+                open: parseFloat(parts[0]),
+                high: parseFloat(parts[1]),
+                low: parseFloat(parts[2]),
+                close: parseFloat(parts[3]),
+                time: parseInt(parts[4]),
+              }
+            })
             data?.forEach((candle) => {
               candle.time = candle.time + timeZonetimes
             })
