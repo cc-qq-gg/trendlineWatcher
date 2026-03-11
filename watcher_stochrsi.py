@@ -263,7 +263,8 @@ def watch1d():
 
 def watchPlan():
     symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
-    time_intervals = ["15m", "1W", "1D", "4H"]
+    # time_intervals = ["15m", "1W", "1D", "4H"]
+    time_intervals = ["1W", "1D", "4H"]
     for symbol in symbols:
         for time_interval in time_intervals:
             watch(time_interval=time_interval, symbol=symbol)
@@ -271,17 +272,17 @@ def watchPlan():
 
 
 # 15m
-schedule.every().hour.at(":00").do(watchPlan)
-schedule.every().hour.at(":15").do(watchPlan)
-schedule.every().hour.at(":30").do(watchPlan)
-schedule.every().hour.at(":45").do(watchPlan)
+# schedule.every().hour.at(":00").do(watchPlan)
+# schedule.every().hour.at(":15").do(watchPlan)
+# schedule.every().hour.at(":30").do(watchPlan)
+# schedule.every().hour.at(":45").do(watchPlan)
 # 4h
-# schedule.every().day.at("00:00").do(watch4h)
-# schedule.every().day.at("04:00").do(watch4h)
-# schedule.every().day.at("08:00").do(watch4h)
-# schedule.every().day.at("12:00").do(watch4h)
-# schedule.every().day.at("16:00").do(watch4h)
-# schedule.every().day.at("20:00").do(watch4h)
+schedule.every().day.at("00:00").do(watchPlan)
+schedule.every().day.at("04:00").do(watchPlan)
+schedule.every().day.at("08:00").do(watchPlan)
+schedule.every().day.at("12:00").do(watchPlan)
+schedule.every().day.at("16:00").do(watchPlan)
+schedule.every().day.at("20:00").do(watchPlan)
 # # 1d
 # schedule.every().day.at("23:00").do(watch1d)
 # # 1w
