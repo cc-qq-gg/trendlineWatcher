@@ -93,10 +93,36 @@ def is_tbl(df, time_interval, symbol):
         bl.to_csv(output_file, index=False)
         print(f"Turn分析结果已保存到: {output_file}")
 
-        return bl.iloc[-1]["datetime"] == turn_time if not bl.empty else False
+        # 检查是否有tbl信号并返回详细信息
+        if not bl.empty and bl.iloc[-1]["datetime"] == turn_time:
+            current_point = bl.iloc[-1]
+            # 找到前一个turn点
+            if len(bl) >= 2:
+                prev_point = bl.iloc[-2]
+                # 计算距离周期数：在原始df中两个点之间的K线数量
+                first_time = prev_point["datetime"]
+                second_time = current_point["datetime"]
+                distance = len(df[(df["datetime"] > first_time) & (df["datetime"] <= second_time)])
+
+                return {
+                    "is_tbl": True,
+                    "first_stochrsi": int(round(prev_point["stochrsi"])),
+                    "second_stochrsi": int(round(current_point["stochrsi"])),
+                    "distance": distance
+                }
+            else:
+                # 只有一个点的情况
+                return {
+                    "is_tbl": True,
+                    "first_stochrsi": None,
+                    "second_stochrsi": int(round(current_point["stochrsi"])),
+                    "distance": None
+                }
+
+        return {"is_tbl": False}
     except Exception as e:
         print(e)
-        return False
+        return {"is_tbl": False}
 
 
 def is_dbl(df, time_interval, symbol):
@@ -135,10 +161,36 @@ def is_dbl(df, time_interval, symbol):
         df_turn.to_csv(output_file, index=False)
         print(f"DBL分析结果已保存到: {output_file}")
 
-        return bl.iloc[-1]["datetime"] == turn_time if not bl.empty else False
+        # 检查是否有dbl信号并返回详细信息
+        if not bl.empty and bl.iloc[-1]["datetime"] == turn_time:
+            current_point = bl.iloc[-1]
+            # 找到前一个turn点
+            if len(bl) >= 2:
+                prev_point = bl.iloc[-2]
+                # 计算距离周期数：在原始df中两个点之间的K线数量
+                first_time = prev_point["datetime"]
+                second_time = current_point["datetime"]
+                distance = len(df[(df["datetime"] > first_time) & (df["datetime"] <= second_time)])
+
+                return {
+                    "is_dbl": True,
+                    "first_stochrsi": int(round(prev_point["stochrsi"])),
+                    "second_stochrsi": int(round(current_point["stochrsi"])),
+                    "distance": distance
+                }
+            else:
+                # 只有一个点的情况
+                return {
+                    "is_dbl": True,
+                    "first_stochrsi": None,
+                    "second_stochrsi": int(round(current_point["stochrsi"])),
+                    "distance": None
+                }
+
+        return {"is_dbl": False}
     except Exception as e:
         print(e)
-        return False
+        return {"is_dbl": False}
 
 
 # def watch(time_interval="5m", rule="15min", symbol="BTC/USDT", days=15):
@@ -221,17 +273,27 @@ def watch(time_interval="15m", symbol="SOL-USDT-SWAP", limit=100):
         #     send_email(subject=f"{time_interval}-{last_stochrsi}", content=msg)
         #     print(msg)
 
-        if is_dbl(df, time_interval, symbol):
-            msg = f"!!!{symbol},{time_interval}，{last_stochrsi}，dbl"
-            send_email(subject=f"{symbol},{time_interval}-{last_stochrsi}", content=msg)
-            show_notification(f"{symbol},{time_interval}", msg)
-            show_notification(f"{symbol},{time_interval}", msg)
+        coin = symbol.split("-")[0]  # BTC-USDT-SWAP -> BTC
 
-        if is_tbl(df, time_interval, symbol):
-            msg = f"!!!{symbol},{time_interval}，{last_stochrsi}，tbl"
-            send_email(subject=f"{symbol},{time_interval}-{last_stochrsi}", content=msg)
-            show_notification(f"{symbol},{time_interval}", msg)
-            show_notification(f"{symbol},{time_interval}", msg)
+        dbl_result = is_dbl(df, time_interval, symbol)
+        if dbl_result["is_dbl"]:
+            first = dbl_result.get("first_stochrsi", "?")
+            dist = dbl_result.get("distance", "?")
+            second = dbl_result.get("second_stochrsi", "?")
+
+            subject = f"{coin}-{time_interval}-dbl {first},{dist},{second}"
+            send_email(subject=subject, content="")
+            show_notification(f"{coin}-{time_interval}", subject)
+
+        tbl_result = is_tbl(df, time_interval, symbol)
+        if tbl_result["is_tbl"]:
+            first = tbl_result.get("first_stochrsi", "?")
+            dist = tbl_result.get("distance", "?")
+            second = tbl_result.get("second_stochrsi", "?")
+
+            subject = f"{coin}-{time_interval}-tbl {first},{dist},{second}"
+            send_email(subject=subject, content="")
+            show_notification(f"{coin}-{time_interval}", subject)
 
     except Exception as e:
         print('Exception',e)
@@ -293,6 +355,7 @@ if __name__ == "__main__":
     # watch1w()
     # watch1d()
     watchPlan()
+    send_email(subject=f"stochrsiWatcher start", content='')
     # exit()
     while True:
         schedule.run_pending()
