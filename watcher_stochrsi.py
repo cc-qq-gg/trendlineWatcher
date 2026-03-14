@@ -2,16 +2,14 @@ import numpy as np
 from datetime import datetime, timedelta
 import pandas as pd
 import talib
-from get_data import get_kline
+from get_data import smart_get_data
 import schedule
 import time
 from send_email import send_email
 import os
-from kline_fetcher import KlineFetcher
 from volatility_calculator import calculate_volatility, calculate_sigma_level
 
 np.set_printoptions(suppress=True)  # 取消科学计数法
-fetcher = KlineFetcher()
 
 
 # 计算公式
@@ -71,11 +69,10 @@ def is_tbl(df, time_interval, symbol):
         # 过滤出 turn 的数据
         df_turn = df[df["turn"] == -1].copy()
 
-        # 计算 bl
+        # 计算 bl (顶背离条件：前一个转折点指标>93，价格创新高，指标没创新高)
         df_turn["bl"] = np.where(
-            # (df_turn["stochrsi"].shift(1) > 93)
-            # &
-            (df_turn["high"] > df_turn["high"].shift(1))
+            (df_turn["stochrsi"].shift(1) > 93)
+            & (df_turn["high"] > df_turn["high"].shift(1))
             & (df_turn["stochrsi"] < df_turn["stochrsi"].shift(1)),
             -1,
             np.nan,
@@ -141,10 +138,10 @@ def is_dbl(df, time_interval, symbol):
         # 过滤出 turn 的数据
         df_turn = df[df["turn"] == 1].copy()
 
-        # 计算 dbl
+        # 计算 dbl (底背离条件：前一个转折点指标<5，价格创新低，指标没创新低)
         df_turn["dbl"] = np.where(
-            (df_turn["stochrsi"].shift(1) < 25)
-            & (df_turn["close"] < df_turn["close"].shift(1))
+            (df_turn["stochrsi"].shift(1) < 5)
+            & (df_turn["low"] < df_turn["low"].shift(1))
             & (df_turn["stochrsi"] > df_turn["stochrsi"].shift(1)),
             1,
             np.nan,
@@ -194,14 +191,20 @@ def is_dbl(df, time_interval, symbol):
 
 
 # def watch(time_interval="5m", rule="15min", symbol="BTC/USDT", days=15):
-def watch(time_interval="15m", symbol="SOL-USDT-SWAP", limit=100):
+def watch(time_interval="15m", symbol="SOL-USDT-SWAP", required_days=90):
     try:
-
-        df = fetcher.get_klines(
+        # 使用 smart_get_data 获取数据
+        result = smart_get_data(
             symbol=symbol,
             timeframe=time_interval,
-            limit=limit,
+            required_days=required_days,
+            verbose=True,
         )
+        df = result["df"].copy()
+
+        # 将 candle_begin_time 重命名为 datetime，保持兼容性
+        if "candle_begin_time" in df.columns:
+            df.rename(columns={"candle_begin_time": "datetime"}, inplace=True)
 
         stochrsi, _ = StochRSI(df["close"].tolist(), m=14, p=3)
 
