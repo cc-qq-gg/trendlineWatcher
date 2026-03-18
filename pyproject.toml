@@ -13,7 +13,7 @@ dependencies = [
     "pycryptodome==3.18.0",
     "gunicorn==21.2.0",
     "gevent==23.9.1",
-    "mplfinance==0.12.10",
+    "mplfinance==3.10.3",
     "matplotlib==3.7.2",
     "talib",
     "schedule>=1.2.0",
