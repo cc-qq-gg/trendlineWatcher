@@ -1,0 +1,40 @@
+[project]
+name = "quantauto"
+version = "0.1.0"
+description = "watcher for crypto"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "flask==2.3.3",
+    "pandas==2.0.3",
+    "ccxt==4.0.85",
+    "numpy==1.24.3",
+    "cryptography==41.0.7",
+    "pycryptodome==3.18.0",
+    "gunicorn==21.2.0",
+    "gevent==23.9.1",
+    "mplfinance==0.12.10",
+    "matplotlib==3.7.2",
+    "talib",
+    "schedule>=1.2.0",
+    "pytz>=2023.3",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
