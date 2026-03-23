@@ -28,6 +28,7 @@ config_constants.py
 temp/
 tmp/
 *.tmp
+*.png
 data/
 
 pm2 start python --name "monitor" -- TrendlineMonitor.py
