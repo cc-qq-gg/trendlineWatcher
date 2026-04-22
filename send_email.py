@@ -17,14 +17,15 @@ pass_code = EMAIL_PASSWORD
 
 receiver = EMAIL_RECIVER
 
-cache = {"last_email_time": 0}
+cache = {"last_email_time_by_subject": {}}
 
 
 # 邮件主题和内容
 def send_email(subject="", content=""):
     now = time.time()
-    if (now - cache["last_email_time"]) < 1800:
-        print("30分钟内只能发送一次！")
+    last_email_time = cache["last_email_time_by_subject"].get(subject, 0)
+    if (now - last_email_time) < 1800:
+        print(f"同一主题30分钟内只能发送一次: {subject}")
         return
     # 创建邮件对象
     message = MIMEText(content, "plain", "utf-8")
@@ -36,7 +37,7 @@ def send_email(subject="", content=""):
         smtp_obj.login(sender, pass_code)
         smtp_obj.sendmail(sender, [receiver], message.as_string())
         print("邮件发送成功")
-        cache["last_email_time"] = now
+        cache["last_email_time_by_subject"][subject] = now
     except smtplib.SMTPException as e:
         print("Error: 无法发送邮件", e)
 
