@@ -93,9 +93,10 @@ def is_tbl(df, time_interval, symbol):
         # 检查是否有tbl信号并返回详细信息
         if not bl.empty and bl.iloc[-1]["datetime"] == turn_time:
             current_point = bl.iloc[-1]
-            # 找到前一个turn点
-            if len(bl) >= 2:
-                prev_point = bl.iloc[-2]
+            # 找到形成本次背离的前一个顶部转折点，而不是前一个背离信号
+            current_pos = df_turn.index.get_loc(current_point.name)
+            if current_pos >= 1:
+                prev_point = df_turn.iloc[current_pos - 1]
                 # 计算距离周期数：在原始df中两个点之间的K线数量
                 first_time = prev_point["datetime"]
                 second_time = current_point["datetime"]
