@@ -8,6 +8,7 @@ import time
 from send_email import send_email
 import os
 from volatility_calculator import calculate_volatility, calculate_sigma_level
+from divergence_algorithm import detect_top_divergence, detect_bottom_divergence
 
 np.set_printoptions(suppress=True)  # 取消科学计数法
 
@@ -37,26 +38,21 @@ def show_notification(title, message):
     )
 
 
+def get_confirmation_time(df, point_index):
+    point_pos = df.index.get_loc(point_index)
+    if point_pos < len(df) - 1:
+        return df.iloc[point_pos + 1]["datetime"]
+    return None
+
+
 def is_tbl(df, time_interval, symbol):
     try:
         df = df.copy()
-        turn_time = df.iloc[-2]["datetime"]
+        confirmation_time = df.iloc[-2]["datetime"]
 
-        # 计算 turn
-
-        standard_turn_down = ((df["stochrsi"] > df["stochrsi"].shift(1))) & (
-            df["stochrsi"] > df["stochrsi"].shift(-1)
-        )
-        top_down = (
-            (df["stochrsi"].shift(1) == 100)
-            & (df["stochrsi"] == 100)
-            & (df["stochrsi"].shift(-1) < 100)
-        )
-
-        df["turn"] = np.where(
-            standard_turn_down | top_down,
-            -1,
-            np.nan,
+        # 计算 turn + 顶背离
+        df, df_turn, bl = detect_top_divergence(
+            df, stoch_col="stochrsi", high_col="high", turn_col="turn", signal_col="bl"
         )
         # 确保 data/stochrsi 目录存在
         output_dir = "data/stochrsi"
@@ -65,21 +61,6 @@ def is_tbl(df, time_interval, symbol):
         output_file = f"{output_dir}/stochrsi_{symbol}_{time_interval}_tbl_turn.csv"
         df.to_csv(output_file, index=False)
         print(f"Turn数据已保存到: {output_file}")
-
-        # 过滤出 turn 的数据
-        df_turn = df[df["turn"] == -1].copy()
-
-        # 计算 bl (顶背离条件：前一个转折点指标>93，价格创新高，指标没创新高)
-        df_turn["bl"] = np.where(
-            (df_turn["stochrsi"].shift(1) > 93)
-            & (df_turn["high"] > df_turn["high"].shift(1))
-            & (df_turn["stochrsi"] < df_turn["stochrsi"].shift(1)),
-            -1,
-            np.nan,
-        )
-
-        # 过滤出 bl 的数据
-        bl = df_turn[df_turn["bl"] == -1]
 
         # 确保 data/stochrsi 目录存在
         output_dir = "data/stochrsi"
@@ -91,8 +72,11 @@ def is_tbl(df, time_interval, symbol):
         print(f"Turn分析结果已保存到: {output_file}")
 
         # 检查是否有tbl信号并返回详细信息
-        if not bl.empty and bl.iloc[-1]["datetime"] == turn_time:
+        if not bl.empty:
             current_point = bl.iloc[-1]
+            current_confirmation_time = get_confirmation_time(df, current_point.name)
+            if current_confirmation_time != confirmation_time:
+                return {"is_tbl": False}
             # 找到形成本次背离的前一个顶部转折点，而不是前一个背离信号
             current_pos = df_turn.index.get_loc(current_point.name)
             if current_pos >= 1:
@@ -126,29 +110,12 @@ def is_tbl(df, time_interval, symbol):
 def is_dbl(df, time_interval, symbol):
     try:
         df = df.copy()
-        turn_time = df.iloc[-2]["datetime"]
+        confirmation_time = df.iloc[-2]["datetime"]
 
-        # 计算 turn
-        df["turn"] = np.where(
-            (df["stochrsi"] < df["stochrsi"].shift(1))
-            & (df["stochrsi"] < df["stochrsi"].shift(-1)),
-            1,
-            np.nan,
+        # 计算 turn + 底背离
+        df, df_turn, bl = detect_bottom_divergence(
+            df, stoch_col="stochrsi", low_col="low", turn_col="turn", signal_col="dbl"
         )
-
-        # 过滤出 turn 的数据
-        df_turn = df[df["turn"] == 1].copy()
-
-        # 计算 dbl (底背离条件：前一个转折点指标<5，价格创新低，指标没创新低)
-        df_turn["dbl"] = np.where(
-            (df_turn["stochrsi"].shift(1) < 5)
-            & (df_turn["low"] < df_turn["low"].shift(1))
-            & (df_turn["stochrsi"] > df_turn["stochrsi"].shift(1)),
-            1,
-            np.nan,
-        )
-
-        bl = df_turn[df_turn["dbl"] == 1]
 
         # 确保 data/stochrsi 目录存在
         output_dir = "data/stochrsi"
@@ -160,11 +127,14 @@ def is_dbl(df, time_interval, symbol):
         print(f"DBL分析结果已保存到: {output_file}")
 
         # 检查是否有dbl信号并返回详细信息
-        if not bl.empty and bl.iloc[-1]["datetime"] == turn_time:
+        if not bl.empty:
             current_point = bl.iloc[-1]
-            # 找到前一个turn点
-            if len(bl) >= 2:
-                prev_point = bl.iloc[-2]
+            current_confirmation_time = get_confirmation_time(df, current_point.name)
+            if current_confirmation_time != confirmation_time:
+                return {"is_dbl": False}
+            current_pos = df_turn.index.get_loc(current_point.name)
+            if current_pos >= 1:
+                prev_point = df_turn.iloc[current_pos - 1]
                 # 计算距离周期数：在原始df中两个点之间的K线数量
                 first_time = prev_point["datetime"]
                 second_time = current_point["datetime"]
