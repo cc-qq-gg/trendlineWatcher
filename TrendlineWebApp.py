@@ -3,7 +3,7 @@
 基于Flask的Web界面，提供趋势线管理和可视化功能
 """
 
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_from_directory, abort
 import json
 import uuid
 import hashlib
@@ -21,6 +21,7 @@ from Crypto.Util.Padding import unpad
 import hashlib
 import os
 import glob
+import threading
 from config_constants import OKEX_READONLY_CONFIG, WEB_SECRET_KEY
 
 
@@ -64,6 +65,140 @@ STOCHRSI_CONFIG = {
     'timeframes': ['1W', '1D', '4H', '15m'],
     'data_dir': 'data/stochrsi'
 }
+
+DIVERGENCE_CONFIG = {
+    'symbols': ['BTC', 'ETH', 'SOL'],
+    'timeframes': ['4h', '1d'],
+    'max_age_hours': 4,
+    'mobile_limit_bars': 400,
+    'output_dir': os.path.join('divergence_visualizer', 'output')
+}
+
+_divergence_refresh_lock = threading.Lock()
+
+
+def _normalize_tf(tf: str) -> str:
+    return tf.upper()
+
+
+def _divergence_image_filename(symbol: str, timeframe: str, mobile: bool = False) -> str:
+    suffix = '_mobile' if mobile else ''
+    return f"detector_{symbol}_{_normalize_tf(timeframe)}_overview{suffix}.png"
+
+
+def _divergence_image_path(symbol: str, timeframe: str, mobile: bool = False) -> str:
+    return os.path.join(DIVERGENCE_CONFIG['output_dir'], _divergence_image_filename(symbol, timeframe, mobile))
+
+
+def _divergence_state_path() -> str:
+    return os.path.join(DIVERGENCE_CONFIG['output_dir'], 'detector_refresh_state.json')
+
+
+def _current_4h_bucket(now: datetime | None = None) -> str:
+    dt = now or datetime.now()
+    bucket_hour = (dt.hour // 4) * 4
+    return f"{dt.strftime('%Y%m%d')}-{bucket_hour:02d}"
+
+
+def _read_divergence_state() -> dict:
+    path = _divergence_state_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _write_divergence_state(state: dict):
+    path = _divergence_state_path()
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def _has_missing_divergence_assets() -> bool:
+
+    for symbol in DIVERGENCE_CONFIG['symbols']:
+        for timeframe in DIVERGENCE_CONFIG['timeframes']:
+            desktop_path = _divergence_image_path(symbol, timeframe, mobile=False)
+            mobile_path = _divergence_image_path(symbol, timeframe, mobile=True)
+            for path in [desktop_path, mobile_path]:
+                if not os.path.exists(path):
+                    return True
+    return False
+
+
+def refresh_divergence_assets(force: bool = False) -> dict:
+    """刷新背离可视化产物（桌面+移动）"""
+    state = _read_divergence_state()
+    current_bucket = _current_4h_bucket()
+    result = {
+        'success': True,
+        'triggered': False,
+        'reason': '',
+        'current_bucket': current_bucket,
+        'last_success_bucket': state.get('last_success_bucket'),
+        'details': [],
+        'updated': False
+    }
+
+    with _divergence_refresh_lock:
+        state = _read_divergence_state()
+        current_bucket = _current_4h_bucket()
+        missing_assets = _has_missing_divergence_assets()
+        last_success_bucket = state.get('last_success_bucket')
+
+        if not force:
+            if missing_assets:
+                result['reason'] = 'missing_files'
+            elif last_success_bucket == current_bucket:
+                result['reason'] = 'same_bucket_skip'
+                result['last_success_bucket'] = last_success_bucket
+                result['updated'] = False
+                return result
+            else:
+                result['reason'] = 'new_bucket_refresh'
+        else:
+            result['reason'] = 'force_refresh'
+
+        from divergence_visualizer.divergence_detector import generate_detector_assets
+
+        updated = False
+        result['triggered'] = True
+        for symbol in DIVERGENCE_CONFIG['symbols']:
+            for timeframe in DIVERGENCE_CONFIG['timeframes']:
+                try:
+                    generate_detector_assets(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        mobile_limit=DIVERGENCE_CONFIG['mobile_limit_bars'],
+                        required_days=90
+                    )
+                    updated = True
+                    result['details'].append({'symbol': symbol, 'timeframe': timeframe, 'success': True})
+                except Exception as e:
+                    result['success'] = False
+                    result['details'].append({'symbol': symbol, 'timeframe': timeframe, 'success': False, 'error': str(e)})
+
+        result['updated'] = updated
+        state.update({
+            'last_attempt_bucket': current_bucket,
+            'last_attempt_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'last_result': 'success' if result['success'] else 'partial_or_failed'
+        })
+        if result['success'] and updated:
+            state.update({
+                'last_success_bucket': current_bucket,
+                'last_success_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+        _write_divergence_state(state)
+        result['last_success_bucket'] = state.get('last_success_bucket')
+        return result
+
+
+def ensure_divergence_fresh() -> dict:
+    return refresh_divergence_assets(force=False)
 
 def get_stochrsi_data(symbol, timeframe):
     """获取指定币种和时间周期的StochRSI数据"""
@@ -445,6 +580,14 @@ def stochrsi_dashboard():
     if not session.get('authenticated'):
         return redirect(url_for('login'))
     return render_template('stochrsi_dashboard.html', symbols=STOCHRSI_CONFIG['symbols'])
+
+
+@app.route('/divergence')
+def divergence_dashboard():
+    """Divergence可视化页面"""
+    if not session.get('authenticated'):
+        return redirect(url_for('login'))
+    return render_template('divergence_dashboard.html', symbols=DIVERGENCE_CONFIG['symbols'], timeframes=[tf.upper() for tf in DIVERGENCE_CONFIG['timeframes']])
 
 @app.route('/stochrsi/test')
 def stochrsi_dashboard_test():
@@ -1287,11 +1430,74 @@ def refresh_stochrsi_data():
         })
 
 
+@app.route('/api/divergence/overview', methods=['GET'])
+@require_auth
+def divergence_overview():
+    """获取Divergence图片概览，访问时兜底刷新"""
+    try:
+        refresh_info = ensure_divergence_fresh()
+
+        cards = []
+        now_ts = time.time()
+        for symbol in DIVERGENCE_CONFIG['symbols']:
+            for timeframe in DIVERGENCE_CONFIG['timeframes']:
+                desktop_filename = _divergence_image_filename(symbol, timeframe, mobile=False)
+                mobile_filename = _divergence_image_filename(symbol, timeframe, mobile=True)
+                desktop_path = _divergence_image_path(symbol, timeframe, mobile=False)
+                mtime = os.path.getmtime(desktop_path) if os.path.exists(desktop_path) else None
+                age_minutes = int((now_ts - mtime) / 60) if mtime else None
+
+                cards.append({
+                    'symbol': symbol,
+                    'timeframe': timeframe.upper(),
+                    'desktop_image_url': f"/api/divergence/image/{desktop_filename}",
+                    'mobile_image_url': f"/api/divergence/image/{mobile_filename}",
+                    'updated_at': datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S') if mtime else '',
+                    'age_minutes': age_minutes
+                })
+
+        return jsonify({
+            'success': True,
+            'data': cards,
+            'refresh': refresh_info
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'获取Divergence概览失败: {str(e)}'}), 500
+
+
+@app.route('/api/divergence/refresh', methods=['POST'])
+@require_auth
+def divergence_refresh():
+    """手动刷新Divergence图片"""
+    try:
+        result = refresh_divergence_assets(force=True)
+        return jsonify({
+            'success': result['success'],
+            'message': 'Divergence刷新完成' if result['success'] else 'Divergence刷新部分失败',
+            'data': result
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'刷新Divergence失败: {str(e)}'}), 500
+
+
+@app.route('/api/divergence/image/<path:filename>', methods=['GET'])
+@require_auth
+def divergence_image(filename):
+    """安全返回Divergence图片"""
+    if not filename.startswith('detector_') or not filename.endswith('.png'):
+        abort(404)
+    file_path = os.path.join(DIVERGENCE_CONFIG['output_dir'], filename)
+    if not os.path.exists(file_path):
+        abort(404)
+    return send_from_directory(DIVERGENCE_CONFIG['output_dir'], filename)
+
+
 if __name__ == '__main__':
     # 创建数据目录
     import os
     os.makedirs('data', exist_ok=True)
     os.makedirs('templates', exist_ok=True)
+    os.makedirs(DIVERGENCE_CONFIG['output_dir'], exist_ok=True)
 
     # 启动Flask应用
     app.run(debug=True, host='0.0.0.0', port=5000)
