@@ -149,7 +149,7 @@ def plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, save_pat
         df_plot,
         type='candle',
         style=s,
-        title=f'{symbol} {timeframe} - 顶背离/底背离检测',
+        title=f'{symbol} {timeframe} - Divergence',
         ylabel='价格',
         volume=False,
         addplot=addplots,
@@ -190,7 +190,7 @@ def plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, save_pat
                        marker='^', s=40, c='green', zorder=5)
     
     # 添加图例
-    ax1.legend(['顶背离 ▼', '底背离 ▲'], loc='upper left')
+    ax1.legend(['up ▼', 'down ▲'], loc='upper left')
     
     plt.tight_layout()
     
