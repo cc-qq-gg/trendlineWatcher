@@ -30,6 +30,10 @@ tmp/
 *.tmp
 *.png
 data/
+quant_lab/
+AGENTS.md
+output/
+risk_order_client.py
 
 pm2 start python --name "monitor" -- TrendlineMonitor.py
 pm2 start python --name "web" -- TrendlineWebApp.py
