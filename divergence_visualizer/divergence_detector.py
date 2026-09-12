@@ -28,6 +28,11 @@ from divergence_algorithm import (
     detect_top_divergence as core_detect_top_divergence,
     detect_bottom_divergence as core_detect_bottom_divergence,
 )
+from alert_indicators import (
+    add_boll_indicators,
+    add_macd_indicators,
+    boll_width_threshold_for_timeframe,
+)
 warnings.filterwarnings('ignore')
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
@@ -108,21 +113,19 @@ def plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, save_pat
     df_plot = df.copy()
     df_plot = df_plot.set_index('candle_begin_time')
     
-    # 创建StochRSI的副图数据
-    stochrsi_plot = df_plot['stochrsi'].values
-    
-    # 获取背离点的时间索引
-    tbl_times = tbl_points['candle_begin_time'].tolist() if len(tbl_points) > 0 else []
-    dbl_times = dbl_points['candle_begin_time'].tolist() if len(dbl_points) > 0 else []
+    macd_hist_colors = [
+        'red' if pd.notna(value) and value >= 0 else 'green'
+        for value in df_plot['macd_hist'].values
+    ]
     
     # 创建附加图层
     addplots = [
-        mpf.make_addplot(stochrsi_plot, panel=1, color='blue', width=1, 
-                         ylabel='StochRSI', ylim=(0, 100)),
-        mpf.make_addplot([80] * len(df_plot), panel=1, color='red', 
-                         linestyle='--', alpha=0.5, width=0.5),
-        mpf.make_addplot([20] * len(df_plot), panel=1, color='green', 
-                         linestyle='--', alpha=0.5, width=0.5),
+        mpf.make_addplot(
+            df_plot['macd_hist'].values, panel=1, type='bar',
+            color=macd_hist_colors, alpha=0.5, ylabel='MACD'
+        ),
+        mpf.make_addplot(df_plot['macd'].values, panel=1, color='#4da3ff', width=1),
+        mpf.make_addplot(df_plot['macd_signal'].values, panel=1, color='#f0a14b', width=1),
     ]
     
     # 创建自定义样式 - 包含中文字体支持
@@ -158,36 +161,39 @@ def plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, save_pat
         returnfig=True
     )
     
-    # 在K线图上添加背离标记
     ax1 = axes[0]  # K线图
-    ax2 = axes[2]  # StochRSI图
-    
-    # 标记顶背离 - 使用时间匹配（只显示箭头，不显示文字）
-    for t in tbl_times:
-        if t in df_plot.index:
-            pos = df_plot.index.get_loc(t)
-            ax1.scatter(pos, df_plot.loc[t, 'High'] * 1.01, 
-                       marker='v', s=50, c='red', zorder=10)
-    
-    # 标记底背离 - 使用时间匹配（只显示箭头，不显示文字）
-    for t in dbl_times:
-        if t in df_plot.index:
-            pos = df_plot.index.get_loc(t)
-            ax1.scatter(pos, df_plot.loc[t, 'Low'] * 0.99, 
-                       marker='^', s=50, c='green', zorder=10)
-    
-    # 在StochRSI图上也标记背离点
-    for t in tbl_times:
-        if t in df_plot.index:
-            pos = df_plot.index.get_loc(t)
-            ax2.scatter(pos, df_plot.loc[t, 'stochrsi'], 
-                       marker='v', s=40, c='red', zorder=5)
-    
-    for t in dbl_times:
-        if t in df_plot.index:
-            pos = df_plot.index.get_loc(t)
-            ax2.scatter(pos, df_plot.loc[t, 'stochrsi'], 
-                       marker='^', s=40, c='green', zorder=5)
+    ax3 = axes[2]  # MACD图
+
+    # 预警标记：紫色=MACD背离，橙色=BOLL信号。
+    macd_top_times = df_plot[df_plot['macd_top_divergence'] == 1].index.tolist()
+    macd_bottom_times = df_plot[df_plot['macd_bottom_divergence'] == 1].index.tolist()
+    boll_up_times = df_plot[df_plot['boll_breakout_signal'] == 1].index.tolist()
+    boll_down_times = df_plot[df_plot['boll_breakout_signal'] == -1].index.tolist()
+    boll_width_times = df_plot[df_plot['boll_width_below_signal'] == 1].index.tolist()
+
+    for t in macd_top_times:
+        pos = df_plot.index.get_loc(t)
+        ax1.scatter(pos, df_plot.loc[t, 'High'] * 1.018, marker='v', s=70, c='purple', zorder=11)
+        ax3.scatter(pos, df_plot.loc[t, 'macd_hist'], marker='v', s=45, c='purple', zorder=6)
+
+    for t in macd_bottom_times:
+        pos = df_plot.index.get_loc(t)
+        ax1.scatter(pos, df_plot.loc[t, 'Low'] * 0.982, marker='^', s=70, c='purple', zorder=11)
+        ax3.scatter(pos, df_plot.loc[t, 'macd_hist'], marker='^', s=45, c='purple', zorder=6)
+
+    for t in boll_up_times:
+        pos = df_plot.index.get_loc(t)
+        ax1.scatter(pos, df_plot.loc[t, 'High'] * 1.026, marker='^', s=45, c='orange', zorder=10)
+
+    for t in boll_down_times:
+        pos = df_plot.index.get_loc(t)
+        ax1.scatter(pos, df_plot.loc[t, 'Low'] * 0.974, marker='v', s=45, c='orange', zorder=10)
+
+    for t in boll_width_times:
+        pos = df_plot.index.get_loc(t)
+        price = df_plot.loc[t, 'Close']
+        ax1.scatter(pos, price, marker='o', s=80, c='orange', zorder=12)
+        ax1.text(pos, price, 'W', color='black', fontsize=7, ha='center', va='center', zorder=13)
     
     # 添加图例
     ax1.legend(['up ▼', 'down ▲'], loc='upper left')
@@ -270,6 +276,10 @@ def process_symbol(symbol, timeframe, data_dir=None, show_interactive=False, lim
     # 计算StochRSI
     stochrsi, _ = StochRSI(df['Close'].tolist(), m=14, p=3)
     df['stochrsi'] = stochrsi
+
+    # 复用预警指标，保证图表和邮件一致。
+    df = add_boll_indicators(df, width=boll_width_threshold_for_timeframe(timeframe))
+    df = add_macd_indicators(df)
     
     # 检测背离
     tbl_points = detect_top_divergence(df)

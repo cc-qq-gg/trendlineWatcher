@@ -1,5 +1,4 @@
 import numpy as np
-from datetime import datetime, timedelta
 import pandas as pd
 import talib
 from get_data import smart_get_data
@@ -7,8 +6,12 @@ import schedule
 import time
 from send_email import send_email
 import os
-from volatility_calculator import calculate_volatility, calculate_sigma_level
 from divergence_algorithm import detect_top_divergence, detect_bottom_divergence
+from alert_indicators import (
+    add_boll_indicators,
+    add_macd_indicators,
+    boll_width_threshold_for_timeframe,
+)
 
 np.set_printoptions(suppress=True)  # 取消科学计数法
 
@@ -36,6 +39,60 @@ def show_notification(title, message):
     osascript -e 'display notification "{message}" with title "{title}"'
     """
     )
+
+
+def _format_number(value, digits=2):
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{float(value):.{digits}f}"
+
+
+def _time_text(row):
+    value = row.get("datetime", row.get("candle_begin_time", ""))
+    return str(value)
+
+
+def _close_value(row):
+    return row.get("close", row.get("Close"))
+
+
+def build_indicator_alerts(df, symbol, time_interval):
+    """基于上一根已确认K线生成简短预警。"""
+    if len(df) < 2:
+        return []
+
+    row = df.iloc[-2]
+    coin = symbol.split("-")[0]
+    tf = str(time_interval).upper()
+    alerts = []
+
+    if int(row.get("macd_top_divergence", 0) or 0) == 1:
+        subject = f"{coin}-{tf} 顶背离，注意上方压力"
+        content = "顶背离：上涨动能减弱，注意上方压力。"
+        alerts.append({"subject": subject, "content": content})
+
+    if int(row.get("macd_bottom_divergence", 0) or 0) == 1:
+        subject = f"{coin}-{tf} 底背离，注意下方支撑"
+        content = "底背离：下跌动能减弱，注意下方支撑。"
+        alerts.append({"subject": subject, "content": content})
+
+    if int(row.get("boll_width_below_signal", 0) or 0) == 1:
+        subject = f"{coin}-{tf} W收缩，等待方向突破"
+        content = "W收缩：波动率压缩，等待方向突破。"
+        alerts.append({"subject": subject, "content": content})
+
+    breakout_signal = row.get("boll_breakout_signal")
+    if pd.notna(breakout_signal) and int(breakout_signal) in (1, -1):
+        side = "上破" if int(breakout_signal) == 1 else "下破"
+        subject = f"{coin}-{tf} BOLL{side}，关注{'延续' if int(breakout_signal) == 1 else '下行'}"
+        content = (
+            "BOLL上破：价格突破上轨，关注趋势延续。"
+            if int(breakout_signal) == 1
+            else "BOLL下破：价格跌破下轨，关注下行延续。"
+        )
+        alerts.append({"subject": subject, "content": content})
+
+    return alerts
 
 
 def get_confirmation_time(df, point_index):
@@ -177,97 +234,25 @@ def watch(time_interval="15m", symbol="SOL-USDT-SWAP", required_days=90):
         if "candle_begin_time" in df.columns:
             df.rename(columns={"candle_begin_time": "datetime"}, inplace=True)
 
-        stochrsi, _ = StochRSI(df["close"].tolist(), m=14, p=3)
-
         df.drop_duplicates(subset=["datetime"], inplace=True)
         df.reset_index(drop=True, inplace=True)
-        df["stochrsi"] = stochrsi
 
-        # 计算波动率
-        window = 20
-        print(f"正在计算 {symbol} {time_interval} 的波动率...")
-        volatility_data = calculate_volatility(df, method='returns', window=window)
+        # 停用StochRSI预警，改用BOLL/MACD。
+        df = add_boll_indicators(df, width=boll_width_threshold_for_timeframe(time_interval))
+        df = add_macd_indicators(df)
 
-        # 计算每行的滚动波动率
-        returns = df['close'].pct_change().dropna()
-
-
-        # 计算滚动波动率序列
-        rolling_volatility = returns.rolling(window=window).std() * 100
-
-        # 为每行计算对应的波动率值
-        df['volatility'] = np.nan
-        df['volatility_rolling'] = np.nan
-        df['volatility_sigma_level'] = ''
-        df['volatility_trend'] = 'stable'
-        df['volatility_historical_mean'] = volatility_data['historical_mean']
-        df['volatility_historical_std'] = volatility_data['historical_std']
-
-        # 为有效数据行赋值
-        for i in range(window, len(df)):
-            if i-1 < len(rolling_volatility) and not pd.isna(rolling_volatility.iloc[i-1]):
-                df.iloc[i, df.columns.get_loc('volatility')] = rolling_volatility.iloc[i-1]
-                df.iloc[i, df.columns.get_loc('volatility_rolling')] = rolling_volatility.iloc[i-1]
-
-                # 计算该行的sigma级别 - 使用整个滚动序列的历史统计
-                vol = rolling_volatility.iloc[i-1]
-
-                # 使用整个有效波动率序列计算历史统计
-                valid_vols = rolling_volatility.dropna()
-                if len(valid_vols) > 1:
-                    historical_mean = valid_vols.mean()
-                    historical_std = valid_vols.std()
-                    sigma_level, _ = calculate_sigma_level(vol, historical_mean, historical_std)
-                else:
-                    sigma_level = ''
-
-                df.iloc[i, df.columns.get_loc('volatility_sigma_level')] = sigma_level
-
-        print(f"波动率计算完成: {volatility_data['current_volatility']:.4f}% ({volatility_data['sigma_level']})")
-
-        # 确保 data/stochrsi 目录存在
-        output_dir = "data/stochrsi"
+        # 确保 data/indicator_alerts 目录存在
+        output_dir = "data/indicator_alerts"
         os.makedirs(output_dir, exist_ok=True)
 
         # 保存结果到指定目录
-        output_file = f"{output_dir}/stochrsi_{symbol}_{time_interval}.csv"
+        output_file = f"{output_dir}/boll_macd_{symbol}_{time_interval}.csv"
         df.to_csv(output_file, index=False)
         print(f"原始数据和指标已保存到: {output_file}")
-        # stochrsi 15m
-        # 1. 小于5，注意最近支撑位强度!!!；三次以上触及支撑，看空!!!, 4h 大概率低点
-        # 2. 大于92，可能短期高点，是否顶背离，4h 首次达到 大概率继续
-        last_stochrsi = stochrsi[-1]
-        HIGH = 94
-        # if last_stochrsi < 5 or last_stochrsi > HIGH:
-        #     msg = (
-        #         f"{time_interval}，{last_stochrsi},可能短期高点位，观察顶背离"
-        #         if last_stochrsi > HIGH
-        #         else f"{time_interval}，{last_stochrsi}，注意最近支撑位强度!!!；三次以上触及支撑，看空!!!"
-        #     )
-        #     send_email(subject=f"{time_interval}-{last_stochrsi}", content=msg)
-        #     print(msg)
-
-        coin = symbol.split("-")[0]  # BTC-USDT-SWAP -> BTC
-
-        dbl_result = is_dbl(df, time_interval, symbol)
-        if dbl_result["is_dbl"]:
-            first = dbl_result.get("first_stochrsi", "?")
-            dist = dbl_result.get("distance", "?")
-            second = dbl_result.get("second_stochrsi", "?")
-
-            subject = f"{coin}-{time_interval}-dbl {first},{dist},{second}"
-            send_email(subject=subject, content="")
-            show_notification(f"{coin}-{time_interval}", subject)
-
-        tbl_result = is_tbl(df, time_interval, symbol)
-        if tbl_result["is_tbl"]:
-            first = tbl_result.get("first_stochrsi", "?")
-            dist = tbl_result.get("distance", "?")
-            second = tbl_result.get("second_stochrsi", "?")
-
-            subject = f"{coin}-{time_interval}-tbl {first},{dist},{second}"
-            send_email(subject=subject, content="")
-            show_notification(f"{coin}-{time_interval}", subject)
+        alerts = build_indicator_alerts(df, symbol=symbol, time_interval=time_interval)
+        for alert in alerts:
+            send_email(subject=alert["subject"], content=alert["content"])
+            show_notification(f"{symbol.split('-')[0]}-{str(time_interval).upper()}", alert["subject"])
 
     except Exception as e:
         print('Exception',e)
@@ -292,7 +277,7 @@ def watch4h():
 def watch1d():
     # watch(time_interval="15m",limit=100)
     # watch(time_interval="4H",limit=100)
-    watch(time_interval="1D",limit=200)
+    watch(time_interval="1D", required_days=200)
     # watch(time_interval="1W",limit=200)
     print("watch1d", time.strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -329,7 +314,7 @@ if __name__ == "__main__":
     # watch1w()
     # watch1d()
     watchPlan()
-    send_email(subject=f"stochrsiWatcher start", content='')
+    send_email(subject=f"indicatorWatcher start", content='')
     # exit()
     while True:
         schedule.run_pending()
