@@ -6,22 +6,25 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "flask==2.3.3",
-    "pandas==2.0.3",
+    "pandas>=2.2.0",
     "ccxt==4.0.85",
-    "numpy==1.24.3",
+    "numpy>=1.26.4",
     "cryptography==41.0.7",
     "pycryptodome==3.18.0",
     "gunicorn==21.2.0",
     "gevent==23.9.1",
-    "matplotlib==3.7.2",
+    "matplotlib>=3.8.4",
+    "mplfinance>=0.12.10b0",
     "plotly>=5.20.0",
     "streamlit>=1.35.0",
     "ta-lib",
-    "vectorbt>=0.26.0",
     "schedule>=1.2.0",
     "pytz>=2023.3",
     "requests>=2.31.0",
 ]
+
+[tool.uv]
+package = false
 
 [dependency-groups]
 dev = [
