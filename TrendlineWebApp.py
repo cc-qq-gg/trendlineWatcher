@@ -23,6 +23,8 @@ import os
 import glob
 import threading
 from config_constants import OKEX_READONLY_CONFIG, WEB_SECRET_KEY
+from StockMonitorManager import StockMonitorManager
+from stock_monitor_service import StockMonitorService
 
 
 app = Flask(__name__)
@@ -45,6 +47,7 @@ def options_handler(path=None):
 # 全局实例
 manager = TrendlineManager()
 monitor = get_global_monitor()
+stock_monitor_manager = StockMonitorManager()
 
 # 公共的exchange配置
 EXCHANGE_CONFIG = OKEX_READONLY_CONFIG
@@ -589,6 +592,13 @@ def divergence_dashboard():
         return redirect(url_for('login'))
     return render_template('divergence_dashboard.html', symbols=DIVERGENCE_CONFIG['symbols'], timeframes=[tf.upper() for tf in DIVERGENCE_CONFIG['timeframes']])
 
+@app.route('/stock-monitor')
+def stock_monitor_dashboard():
+    """股票价格监控页面"""
+    if not session.get('authenticated'):
+        return redirect(url_for('login'))
+    return render_template('stock_monitor.html')
+
 @app.route('/stochrsi/test')
 def stochrsi_dashboard_test():
     """StochRSI监控面板测试页面（无需认证）"""
@@ -676,6 +686,115 @@ def logout():
     """登出"""
     session.clear()
     return jsonify({'success': True, 'message': '已退出登录'})
+
+
+def build_stock_monitor_service():
+    """构造股票监控检查服务。"""
+    return StockMonitorService(manager=stock_monitor_manager)
+
+
+def _format_stock_monitor(item):
+    return {
+        'id': item.get('id', ''),
+        'code': item.get('code', ''),
+        'name': item.get('name', ''),
+        'target_price': float(item.get('target_price') or 0),
+        'note': item.get('note', ''),
+        'status': item.get('status', ''),
+        'last_checked_date': item.get('last_checked_date', ''),
+        'last_price': item.get('last_price', ''),
+        'triggered_at': item.get('triggered_at', ''),
+        'triggered_price': item.get('triggered_price', ''),
+        'created_at': item.get('created_at', ''),
+        'updated_at': item.get('updated_at', ''),
+    }
+
+
+@app.route('/api/stock-monitors', methods=['GET'])
+@require_auth
+def get_stock_monitors():
+    """获取股票监控列表"""
+    return jsonify({
+        'success': True,
+        'data': [_format_stock_monitor(item) for item in stock_monitor_manager.get_all_monitors()]
+    })
+
+
+@app.route('/api/stock-monitors', methods=['POST'])
+@require_auth
+def create_stock_monitor():
+    """创建股票监控"""
+    try:
+        data = request.get_json() or {}
+        if not data.get('code'):
+            return jsonify({'success': False, 'message': '缺少股票代码'}), 400
+        if data.get('target_price') in (None, ''):
+            return jsonify({'success': False, 'message': '缺少监控价格'}), 400
+
+        monitor_id = stock_monitor_manager.create_monitor(
+            code=data.get('code'),
+            target_price=data.get('target_price'),
+            note=data.get('note', ''),
+            name=data.get('name', ''),
+        )
+        monitor_data = stock_monitor_manager.get_monitor(monitor_id)
+        return jsonify({
+            'success': True,
+            'data': _format_stock_monitor(monitor_data),
+            'message': '股票监控创建成功'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/stock-monitors/<monitor_id>', methods=['PUT'])
+@require_auth
+def update_stock_monitor(monitor_id):
+    """更新股票监控"""
+    try:
+        data = request.get_json() or {}
+        update_data = {}
+        for key in ['name', 'note', 'status']:
+            if key in data:
+                update_data[key] = data[key]
+        if 'code' in data:
+            from StockMonitorManager import normalize_stock_code
+            update_data['code'] = normalize_stock_code(data['code'])
+        if 'target_price' in data:
+            update_data['target_price'] = float(data['target_price'])
+
+        success = stock_monitor_manager.update_monitor(monitor_id, **update_data)
+        if not success:
+            return jsonify({'success': False, 'message': '股票监控不存在'}), 404
+        return jsonify({'success': True, 'message': '股票监控更新成功'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/stock-monitors/<monitor_id>', methods=['DELETE'])
+@require_auth
+def delete_stock_monitor(monitor_id):
+    """删除股票监控"""
+    if stock_monitor_manager.delete_monitor(monitor_id):
+        return jsonify({'success': True, 'message': '股票监控已删除'})
+    return jsonify({'success': False, 'message': '股票监控不存在'}), 404
+
+
+@app.route('/api/stock-monitors/<monitor_id>/reactivate', methods=['POST'])
+@require_auth
+def reactivate_stock_monitor(monitor_id):
+    """重新激活已触发监控"""
+    if stock_monitor_manager.reactivate_monitor(monitor_id):
+        return jsonify({'success': True, 'message': '股票监控已重新激活'})
+    return jsonify({'success': False, 'message': '股票监控不存在'}), 404
+
+
+@app.route('/api/stock-monitors/check', methods=['POST'])
+@require_auth
+def check_stock_monitors():
+    """手动检查股票触价"""
+    result = build_stock_monitor_service().check_all()
+    return jsonify({'success': result.get('success', False), 'data': result})
 
 @app.route('/api/trendlines', methods=['GET'])
 @require_auth

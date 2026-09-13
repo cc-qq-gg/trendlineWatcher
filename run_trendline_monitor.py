@@ -9,6 +9,7 @@ import time
 from TrendlineMonitor import start_global_monitoring, stop_global_monitoring
 from TrendlineWebApp import app
 from TrendlineManager import TrendlineManager
+from stock_monitor_scheduler import start_stock_monitor_scheduler
 
 
 def main():
@@ -30,6 +31,8 @@ def main():
     print("\n🌐 启动Web界面...")
     print("📱 请在浏览器中访问: http://localhost:5000")
     print("💡 系统为手动刷新模式，请通过Web界面手动刷新数据和检查信号")
+    start_stock_monitor_scheduler()
+    print("📈 股票监控将在每日16:00自动检查")
     print("⚠️  按 Ctrl+C 停止系统")
 
     try:

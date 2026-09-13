@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>股票监控</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background:
+                linear-gradient(rgba(56, 189, 248, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(56, 189, 248, 0.04) 1px, transparent 1px),
+                #0b1018;
+            background-size: 28px 28px;
+            color: #e5edf7;
+        }
+        .container {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 14px;
+        }
+        .toolbar {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .title {
+            font-size: 20px;
+            font-weight: 850;
+            letter-spacing: 0;
+        }
+        .actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn, .icon-btn {
+            border: 1px solid #26384d;
+            background: #101927;
+            color: #dbeafe;
+            cursor: pointer;
+        }
+        .btn {
+            min-height: 36px;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 750;
+        }
+        .btn.primary {
+            border-color: #0ea5e9;
+            background: #0b4f73;
+            color: #e0f2fe;
+        }
+        .btn:disabled, .icon-btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+        .icon-btn {
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 17px;
+            line-height: 1;
+        }
+        .icon-btn:hover, .btn:hover { border-color: #38bdf8; }
+        .icon-btn.danger { color: #fb7185; }
+        .status {
+            min-height: 34px;
+            display: flex;
+            align-items: center;
+            border: 1px solid #26384d;
+            border-radius: 8px;
+            padding: 0 10px;
+            background: #0f1724;
+            color: #93a4bb;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .form {
+            display: grid;
+            grid-template-columns: 1fr 130px minmax(220px, 1.6fr) 72px;
+            gap: 8px;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #1f3148;
+            border-radius: 8px;
+            background: rgba(15, 23, 36, 0.92);
+        }
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .field label {
+            color: #71849d;
+            font-size: 11px;
+            font-weight: 750;
+        }
+        input {
+            width: 100%;
+            height: 36px;
+            border: 1px solid #26384d;
+            border-radius: 8px;
+            padding: 8px 10px;
+            background: #0b1220;
+            color: #e5edf7;
+            font-size: 14px;
+            outline: none;
+        }
+        input:focus {
+            border-color: #38bdf8;
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.16);
+        }
+        .form .btn { align-self: end; height: 36px; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+        .card {
+            min-height: 164px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 12px;
+            border: 1px solid #22354c;
+            border-radius: 8px;
+            background:
+                linear-gradient(135deg, rgba(56, 189, 248, 0.10), transparent 36%),
+                #111827;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+        }
+        .card.triggered { opacity: 0.76; }
+        .card-head {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px;
+            align-items: start;
+        }
+        .identity {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 7px;
+            min-width: 0;
+        }
+        .state-dot {
+            width: 10px;
+            height: 10px;
+            margin-top: 7px;
+            border-radius: 50%;
+            background: #34d399;
+            box-shadow: 0 0 14px rgba(52, 211, 153, 0.55);
+        }
+        .state-dot.triggered {
+            background: #fb7185;
+            box-shadow: 0 0 14px rgba(251, 113, 133, 0.55);
+        }
+        .state-dot.inactive {
+            background: #94a3b8;
+            box-shadow: none;
+        }
+        .name {
+            overflow: hidden;
+            color: #f8fafc;
+            font-size: 17px;
+            font-weight: 850;
+            line-height: 1.2;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .symbol {
+            margin-top: 2px;
+            color: #7dd3fc;
+            font-size: 12px;
+            font-weight: 750;
+        }
+        .card-actions {
+            display: flex;
+            gap: 6px;
+            justify-content: flex-end;
+        }
+        .price-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px;
+            align-items: end;
+        }
+        .price-label {
+            color: #71849d;
+            font-size: 11px;
+            font-weight: 800;
+        }
+        .price {
+            color: #e0f2fe;
+            font-size: 28px;
+            font-weight: 900;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+        }
+        .meta {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 7px;
+            color: #dbeafe;
+            font-size: 13px;
+        }
+        .meta span {
+            display: block;
+            margin-bottom: 1px;
+            color: #71849d;
+            font-size: 11px;
+            font-weight: 750;
+        }
+        .note {
+            overflow: hidden;
+            color: #a9bad1;
+            font-size: 12px;
+            line-height: 1.35;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .edit-grid {
+            display: grid;
+            grid-template-columns: 1fr 112px;
+            gap: 8px;
+        }
+        .edit-grid .wide { grid-column: 1 / -1; }
+        .edit-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            margin-top: auto;
+        }
+        .empty {
+            grid-column: 1 / -1;
+            padding: 42px 16px;
+            text-align: center;
+            color: #71849d;
+            border: 1px dashed #26384d;
+            border-radius: 8px;
+            background: rgba(15, 23, 36, 0.8);
+        }
+        @media (max-width: 980px) {
+            .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .form { grid-template-columns: 1fr 120px; }
+            .form .field:nth-child(3) { grid-column: 1 / -1; }
+        }
+        @media (max-width: 640px) {
+            .container { padding: 10px; }
+            .toolbar { grid-template-columns: 1fr; }
+            .actions {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+            }
+            .status {
+                grid-column: 1 / -1;
+                justify-content: center;
+            }
+            .form { grid-template-columns: 1fr; }
+            .form .field:nth-child(3) { grid-column: auto; }
+            .grid { grid-template-columns: 1fr; gap: 8px; }
+            .card { min-height: 150px; padding: 11px; }
+            .price { font-size: 26px; }
+            .icon-btn { width: 38px; height: 38px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="toolbar">
+        <div class="actions">
+            <button id="checkBtn" class="btn primary">检查</button>
+            <button id="refreshBtn" class="btn">刷新</button>
+            <div id="status" class="status">准备就绪</div>
+        </div>
+    </div>
+
+    <form id="monitorForm" class="form">
+        <div class="field">
+            <label for="codeInput">代码</label>
+            <input id="codeInput" placeholder="600000 / sh.600000" autocomplete="off" required>
+        </div>
+        <div class="field">
+            <label for="priceInput">监控价</label>
+            <input id="priceInput" type="number" min="0" step="0.001" placeholder="12.30" required>
+        </div>
+        <div class="field">
+            <label for="noteInput">备注</label>
+            <input id="noteInput" placeholder="回踩确认、压力位、计划买入..." autocomplete="off">
+        </div>
+        <button class="btn primary" type="submit">添加</button>
+    </form>
+
+    <div id="grid" class="grid"></div>
+</div>
+
+<script>
+    const gridEl = document.getElementById('grid');
+    const statusEl = document.getElementById('status');
+    const formEl = document.getElementById('monitorForm');
+    const checkBtn = document.getElementById('checkBtn');
+    const refreshBtn = document.getElementById('refreshBtn');
+    let monitorsState = [];
+    let editingId = null;
+
+    function setStatus(text) {
+        statusEl.textContent = text;
+    }
+
+    function money(value) {
+        const num = Number(value);
+        return Number.isFinite(num) ? num.toFixed(2) : 'N/A';
+    }
+
+    function shortDate(value) {
+        return value ? String(value).slice(5) : '-';
+    }
+
+    function statusIcon(status) {
+        if (status === 'triggered') return { icon: '⚡', title: '已触发', cls: 'triggered' };
+        if (status === 'inactive') return { icon: 'Ⅱ', title: '已暂停', cls: 'inactive' };
+        return { icon: '●', title: '监控中', cls: 'active' };
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+    }
+
+    async function requestJson(url, options = {}) {
+        const resp = await fetch(url, {
+            headers: { 'Content-Type': 'application/json' },
+            ...options,
+        });
+        const json = await resp.json();
+        if (!resp.ok || !json.success) {
+            throw new Error(json.message || '请求失败');
+        }
+        return json;
+    }
+
+    function renderEditCard(item) {
+        return `
+            <div class="card">
+                <div class="edit-grid">
+                    <div class="field">
+                        <label>代码</label>
+                        <input data-edit="code" value="${escapeHtml(item.code)}">
+                    </div>
+                    <div class="field">
+                        <label>监控价</label>
+                        <input data-edit="target_price" type="number" min="0" step="0.001" value="${escapeHtml(item.target_price)}">
+                    </div>
+                    <div class="field wide">
+                        <label>备注</label>
+                        <input data-edit="note" value="${escapeHtml(item.note || '')}" placeholder="可为空">
+                    </div>
+                </div>
+                <div class="edit-actions">
+                    <button class="icon-btn primary" title="保存" data-action="save" data-id="${item.id}">✓</button>
+                    <button class="icon-btn" title="取消" data-action="cancel" data-id="${item.id}">↺</button>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderViewCard(item) {
+        const state = statusIcon(item.status);
+        const title = item.name || item.code;
+        const subtitle = item.name ? `<div class="symbol">${escapeHtml(item.code)}</div>` : '';
+        const note = item.note ? `<div class="note">${escapeHtml(item.note)}</div>` : '';
+        const primaryAction = item.status === 'triggered'
+            ? `<button class="icon-btn primary" title="再次激活" data-action="reactivate" data-id="${item.id}">▶</button>`
+            : item.status === 'inactive'
+                ? `<button class="icon-btn primary" title="激活" data-action="activate" data-id="${item.id}">▶</button>`
+                : `<button class="icon-btn" title="暂停" data-action="pause" data-id="${item.id}">Ⅱ</button>`;
+
+        return `
+            <div class="card ${item.status === 'triggered' ? 'triggered' : ''}">
+                <div class="card-head">
+                    <div class="identity">
+                        <span class="state-dot ${state.cls}" title="${state.title}"></span>
+                        <div>
+                            <div class="name">${escapeHtml(title)}</div>
+                            ${subtitle}
+                        </div>
+                    </div>
+                    <div class="card-actions">
+                        <button class="icon-btn" title="修改" data-action="edit" data-id="${item.id}">✎</button>
+                        ${primaryAction}
+                        <button class="icon-btn danger" title="删除" data-action="delete" data-id="${item.id}">×</button>
+                    </div>
+                </div>
+                <div class="price-row">
+                    <div>
+                        <div class="price-label">监控价</div>
+                        <div class="price">${money(item.target_price)}</div>
+                    </div>
+                </div>
+                <div class="meta">
+                    <div><span>最新</span>${money(item.last_price)}</div>
+                    <div><span>检查</span>${shortDate(item.last_checked_date)}</div>
+                    <div><span>触发价</span>${money(item.triggered_price)}</div>
+                    <div><span>触发</span>${item.triggered_at ? shortDate(item.triggered_at) : '-'}</div>
+                </div>
+                ${note}
+            </div>
+        `;
+    }
+
+    function render(monitors) {
+        monitorsState = monitors || [];
+        if (!monitorsState.length) {
+            gridEl.innerHTML = '<div class="empty">暂无股票监控</div>';
+            return;
+        }
+        gridEl.innerHTML = monitorsState.map(item => (
+            item.id === editingId ? renderEditCard(item) : renderViewCard(item)
+        )).join('');
+    }
+
+    async function loadMonitors() {
+        setStatus('加载中...');
+        try {
+            const json = await requestJson('/api/stock-monitors');
+            render(json.data || []);
+            setStatus('已加载');
+        } catch (err) {
+            setStatus(err.message);
+            gridEl.innerHTML = '<div class="empty">加载失败</div>';
+        }
+    }
+
+    formEl.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const payload = {
+            code: document.getElementById('codeInput').value.trim(),
+            target_price: document.getElementById('priceInput').value,
+            note: document.getElementById('noteInput').value.trim(),
+        };
+        try {
+            await requestJson('/api/stock-monitors', {
+                method: 'POST',
+                body: JSON.stringify(payload),
+            });
+            formEl.reset();
+            await loadMonitors();
+            setStatus('已添加');
+        } catch (err) {
+            setStatus(err.message);
+        }
+    });
+
+    gridEl.addEventListener('click', async (event) => {
+        const btn = event.target.closest('button[data-action]');
+        if (!btn) return;
+        const { action, id } = btn.dataset;
+        const card = btn.closest('.card');
+        btn.disabled = true;
+        try {
+            if (action === 'edit') {
+                editingId = id;
+                render(monitorsState);
+                return;
+            }
+            if (action === 'cancel') {
+                editingId = null;
+                render(monitorsState);
+                return;
+            }
+            if (action === 'save') {
+                const payload = {
+                    code: card.querySelector('[data-edit="code"]').value.trim(),
+                    target_price: card.querySelector('[data-edit="target_price"]').value,
+                    note: card.querySelector('[data-edit="note"]').value.trim(),
+                };
+                await requestJson(`/api/stock-monitors/${id}`, {
+                    method: 'PUT',
+                    body: JSON.stringify(payload),
+                });
+                editingId = null;
+            } else if (action === 'delete') {
+                await requestJson(`/api/stock-monitors/${id}`, { method: 'DELETE' });
+            } else if (action === 'reactivate') {
+                await requestJson(`/api/stock-monitors/${id}/reactivate`, { method: 'POST' });
+            } else if (action === 'pause') {
+                await requestJson(`/api/stock-monitors/${id}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ status: 'inactive' }),
+                });
+            } else if (action === 'activate') {
+                await requestJson(`/api/stock-monitors/${id}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ status: 'active' }),
+                });
+            }
+            await loadMonitors();
+        } catch (err) {
+            setStatus(err.message);
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    checkBtn.addEventListener('click', async () => {
+        checkBtn.disabled = true;
+        setStatus('检查中...');
+        try {
+            const json = await requestJson('/api/stock-monitors/check', { method: 'POST' });
+            const data = json.data || {};
+            await loadMonitors();
+            setStatus(`检查完成：${data.checked || 0} 个，触发 ${data.triggered || 0} 个`);
+        } catch (err) {
+            setStatus(err.message);
+        } finally {
+            checkBtn.disabled = false;
+        }
+    });
+
+    refreshBtn.addEventListener('click', loadMonitors);
+    document.addEventListener('DOMContentLoaded', loadMonitors);
+</script>
+</body>
+</html>
