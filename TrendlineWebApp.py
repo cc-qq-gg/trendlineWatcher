@@ -28,7 +28,9 @@ from stock_monitor_service import StockMonitorService
 
 
 app = Flask(__name__)
+from btc_strategy.data import load_csv  # noqa: E402
 app.config['SECRET_KEY'] = WEB_SECRET_KEY
+
 
 # 简单的CORS支持
 @app.after_request
@@ -1609,6 +1611,43 @@ def divergence_image(filename):
     if not os.path.exists(file_path):
         abort(404)
     return send_from_directory(DIVERGENCE_CONFIG['output_dir'], filename)
+
+
+BTC_DATA_PATH = os.path.join('data', 'btc_strategy', 'raw', 'BTC-USDT_5m.csv')
+
+
+@app.route('/vendor/<path:filename>')
+def vendor_asset(filename):
+    """Serve vendored assets referenced by standalone viewer pages."""
+    vendor_dir = os.path.join(os.path.dirname(__file__), 'vendor')
+    return send_from_directory(vendor_dir, filename)
+
+@app.route('/btc-strategy')
+def btc_strategy_page():
+    if not session.get('authenticated'):
+        return redirect(url_for('login'))
+    return send_from_directory(os.path.join(os.path.dirname(__file__), 'btc_strategy', 'static'), 'viewer.html')
+
+
+@app.route('/api/btc-strategy/status')
+@require_auth
+def btc_strategy_status():
+    if not os.path.exists(BTC_DATA_PATH):
+        return jsonify({'success': False, 'stale': True, 'message': 'BTC data unavailable'}), 503
+    frame = load_csv(BTC_DATA_PATH)
+    return jsonify({'success': True, 'stale': False, 'rows': len(frame),
+                    'start': frame.candle_begin_time.iloc[0].isoformat(),
+                    'end': frame.candle_begin_time.iloc[-1].isoformat()})
+
+
+@app.route('/api/btc-strategy/payload')
+@require_auth
+def btc_strategy_payload():
+    path = os.path.join('data', 'btc_strategy', 'backtests', 'latest_payload.json')
+    if not os.path.exists(path):
+        return jsonify({'success': False, 'message': 'BTC backtest payload unavailable'}), 503
+    with open(path, 'r', encoding='utf-8') as handle:
+        return app.response_class(handle.read(), mimetype='application/json')
 
 
 if __name__ == '__main__':
