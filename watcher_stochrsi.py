@@ -66,12 +66,12 @@ def build_indicator_alerts(df, symbol, time_interval):
     tf = str(time_interval).upper()
     alerts = []
 
-    if int(row.get("macd_top_divergence", 0) or 0) == 1:
+    if int(row.get("macd_top_confirmed", 0) or 0) == 1:
         subject = f"{coin}-{tf} 顶背离，注意上方压力"
         content = "顶背离：上涨动能减弱，注意上方压力。"
         alerts.append({"subject": subject, "content": content})
 
-    if int(row.get("macd_bottom_divergence", 0) or 0) == 1:
+    if int(row.get("macd_bottom_confirmed", 0) or 0) == 1:
         subject = f"{coin}-{tf} 底背离，注意下方支撑"
         content = "底背离：下跌动能减弱，注意下方支撑。"
         alerts.append({"subject": subject, "content": content})

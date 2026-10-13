@@ -8,7 +8,7 @@ MACD_SLOW = 26
 MACD_SIGNAL = 9
 
 # MACD背离规则版本，用于缓存失效。
-MACD_DIVERGENCE_VERSION = 4
+MACD_DIVERGENCE_VERSION = 5
 
 # BOLL默认参数，对齐stater。
 DEFAULT_BOLL_LENGTH = 10
@@ -30,21 +30,48 @@ def _column_name(df, name):
 
 
 def histogram_segments(values):
-    """按MACD柱体正负切段。"""
+    """按MACD柱体正负切段，零值归入当前柱段。"""
     values = np.asarray(values, dtype="float64")
-    signs = np.zeros(len(values), dtype=int)
-    finite = np.isfinite(values)
-    signs[finite] = np.sign(values[finite]).astype(int)
-    segments = []
-    if len(signs) == 0:
-        return segments
-    start = 0
-    for index in range(1, len(signs)):
-        if signs[index] != signs[start]:
-            segments.append((int(signs[start]), np.arange(start, index)))
+    segments: list[tuple[int, np.ndarray]] = []
+    current_sign = 0
+    start = None
+    for index, value in enumerate(values):
+        if not np.isfinite(value) or value == 0:
+            continue
+        sign = 1 if value > 0 else -1
+        if current_sign == 0:
+            current_sign = sign
             start = index
-    segments.append((int(signs[start]), np.arange(start, len(signs))))
+            continue
+        if sign != current_sign:
+            segments.append((current_sign, np.arange(start, index)))
+            current_sign = sign
+            start = index
+    if current_sign != 0 and start is not None:
+        segments.append((current_sign, np.arange(start, len(values))))
     return segments
+
+
+def _segment_stats(
+    sign,
+    segment,
+    hist,
+    highs,
+    lows,
+):
+    if sign > 0:
+        hist_idx = int(segment[np.argmax(hist[segment])])
+        price_idx = int(segment[np.argmax(highs[segment])])
+    else:
+        hist_idx = int(segment[np.argmin(hist[segment])])
+        price_idx = int(segment[np.argmin(lows[segment])])
+    return {
+        "sign": sign,
+        "start": int(segment[0]),
+        "end": int(segment[-1]),
+        "hist_idx": hist_idx,
+        "price_idx": price_idx,
+    }
 
 
 def add_macd_indicators(df):
@@ -70,32 +97,36 @@ def add_macd_indicators(df):
     highs = np.asarray(df[high_col], dtype="float64")
     lows = np.asarray(df[low_col], dtype="float64")
     segments = histogram_segments(hist)
+    df["macd_top_confirmed"] = 0
+    df["macd_bottom_confirmed"] = 0
 
-    for previous, middle, current in zip(segments, segments[1:], segments[2:]):
-        previous_sign, previous_segment = previous
-        middle_sign, _ = middle
-        current_sign, current_segment = current
-        if (previous_sign, middle_sign, current_sign) != (1, -1, 1):
-            continue
-        previous_hist = previous_segment[np.argmax(hist[previous_segment])]
-        current_hist = current_segment[np.argmax(hist[current_segment])]
-        previous_price = previous_segment[np.argmax(highs[previous_segment])]
-        current_price = current_segment[np.argmax(highs[current_segment])]
-        if highs[current_price] > highs[previous_price] and hist[current_hist] < hist[previous_hist]:
-            df.loc[current_price, "macd_top_divergence"] = 1
-
-    for previous, middle, current in zip(segments, segments[1:], segments[2:]):
-        previous_sign, previous_segment = previous
-        middle_sign, _ = middle
-        current_sign, current_segment = current
-        if (previous_sign, middle_sign, current_sign) != (-1, 1, -1):
-            continue
-        previous_hist = previous_segment[np.argmin(hist[previous_segment])]
-        current_hist = current_segment[np.argmin(hist[current_segment])]
-        previous_price = previous_segment[np.argmin(lows[previous_segment])]
-        current_price = current_segment[np.argmin(lows[current_segment])]
-        if lows[current_price] < lows[previous_price] and hist[current_hist] > hist[previous_hist]:
-            df.loc[current_price, "macd_bottom_divergence"] = 1
+    previous_segment = None
+    previous_positive = None
+    previous_negative = None
+    for segment in segments:
+        current = _segment_stats(segment[0], segment[1], hist, highs, lows)
+        if previous_segment is not None:
+            if previous_segment["sign"] > 0 and current["sign"] < 0:
+                if previous_positive is not None:
+                    price_now = previous_segment["price_idx"]
+                    price_before = previous_positive["price_idx"]
+                    hist_now = previous_segment["hist_idx"]
+                    hist_before = previous_positive["hist_idx"]
+                    if highs[price_now] > highs[price_before] and hist[hist_now] < hist[hist_before]:
+                        df.loc[price_now, "macd_top_divergence"] = 1
+                        df.loc[current["start"], "macd_top_confirmed"] = 1
+                previous_positive = previous_segment
+            elif previous_segment["sign"] < 0 and current["sign"] > 0:
+                if previous_negative is not None:
+                    price_now = previous_segment["price_idx"]
+                    price_before = previous_negative["price_idx"]
+                    hist_now = previous_segment["hist_idx"]
+                    hist_before = previous_negative["hist_idx"]
+                    if lows[price_now] < lows[price_before] and hist[hist_now] > hist[hist_before]:
+                        df.loc[price_now, "macd_bottom_divergence"] = 1
+                        df.loc[current["start"], "macd_bottom_confirmed"] = 1
+                previous_negative = previous_segment
+        previous_segment = current
 
     return df
 

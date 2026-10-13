@@ -23,6 +23,8 @@ def alert_frame():
             "macd_hist": [1.0, 2.0, 0.5, 0.2],
             "macd_top_divergence": [0, 0, 1, 0],
             "macd_bottom_divergence": [0, 0, 0, 0],
+            "macd_top_confirmed": [0, 0, 1, 0],
+            "macd_bottom_confirmed": [0, 0, 0, 0],
         }
     )
 
@@ -43,6 +45,18 @@ def test_build_indicator_alerts_describes_confirmed_macd_and_width_signals():
     assert "W收缩：波动率压缩，等待方向突破。" in contents
     assert all("时间:" not in content for content in contents)
     assert all("价格:" not in content for content in contents)
+
+
+def test_build_indicator_alerts_does_not_send_before_macd_confirmation():
+    frame = alert_frame()
+    frame["macd_top_confirmed"] = 0
+    alerts = watcher.build_indicator_alerts(
+        frame,
+        symbol="BTC-USDT-SWAP",
+        time_interval="4H",
+    )
+
+    assert "BTC-4H 顶背离，注意上方压力" not in [alert["subject"] for alert in alerts]
 
 
 def test_watch_sends_new_indicator_alerts_from_confirmed_candle(tmp_path, monkeypatch):

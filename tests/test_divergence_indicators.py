@@ -41,6 +41,9 @@ def test_macd_divergence_marks_top_and_bottom_with_project_ohlc_columns(monkeypa
 
     assert int(top["macd_top_divergence"].sum()) == 1
     assert int(top.loc[6, "macd_top_divergence"]) == 1
+    assert int(top["macd_top_confirmed"].sum()) == 1
+    assert int(top.loc[8, "macd_top_confirmed"]) == 1
+    assert top.loc[8, "macd_hist"] < 0
 
     bottom_lows = [10, 5, 6, 10, 10, 10, 4, 5, 10, 10]
     bottom = run_with_macd_hist(
@@ -51,6 +54,19 @@ def test_macd_divergence_marks_top_and_bottom_with_project_ohlc_columns(monkeypa
 
     assert int(bottom["macd_bottom_divergence"].sum()) == 1
     assert int(bottom.loc[6, "macd_bottom_divergence"]) == 1
+    assert int(bottom["macd_bottom_confirmed"].sum()) == 1
+    assert int(bottom.loc[8, "macd_bottom_confirmed"]) == 1
+    assert bottom.loc[8, "macd_hist"] > 0
+
+
+def test_macd_divergence_is_not_confirmed_without_reverse_flip(monkeypatch):
+    top = run_with_macd_hist(
+        monkeypatch,
+        [1, 4, 1, -1, -1, 1, 2, 1, 0, 0],
+        highs=[10, 15, 14, 10, 10, 10, 16, 14, 12, 11],
+    )
+
+    assert int(top["macd_top_confirmed"].sum()) == 0
 
 
 def test_boll_indicators_mark_band_width_and_breakouts():
