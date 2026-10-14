@@ -4,10 +4,10 @@ import argparse
 import json
 import logging
 import os
-from pathlib import Path
 import signal
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -16,13 +16,10 @@ from btc_strategy.backtest import atomic_json, build_payload, complete_4h
 from btc_strategy.data import load_csv, validate_5m_continuity
 from btc_strategy.data_sync import (
     DEFAULT_DATA_PATH,
-    DEFAULT_RUNNER_PYTHON,
-    DEFAULT_STATER_ROOT,
     DEFAULT_SYMBOL,
     DEFAULT_TIMEFRAME,
     sync_btc_data,
 )
-
 
 DEFAULT_PAYLOAD_PATH = Path("data/btc_strategy/backtests/latest_payload.json")
 DEFAULT_STATE_PATH = Path("data/btc_strategy/worker_state.json")
@@ -131,9 +128,8 @@ def run_once(
     state_path: str | Path = DEFAULT_STATE_PATH,
     symbol: str = DEFAULT_SYMBOL,
     timeframe: str = DEFAULT_TIMEFRAME,
-    runner_python: str = DEFAULT_RUNNER_PYTHON,
-    stater_root: str | Path = DEFAULT_STATER_ROOT,
     dry_run: bool = False,
+    exchange: Any | None = None,
 ) -> dict[str, Any]:
     started_at = utc_now()
     sync_report = sync_btc_data(
@@ -142,8 +138,7 @@ def run_once(
         timeframe=timeframe,
         repair=True,
         write=True,
-        runner_python=runner_python,
-        stater_root=stater_root,
+        exchange=exchange,
     )
     frame = load_csv(data_path)
     continuity = validate_5m_continuity(frame)
@@ -182,8 +177,7 @@ def check_status(
     pid_path: str | Path = DEFAULT_PID_PATH,
     symbol: str = DEFAULT_SYMBOL,
     timeframe: str = DEFAULT_TIMEFRAME,
-    runner_python: str = DEFAULT_RUNNER_PYTHON,
-    stater_root: str | Path = DEFAULT_STATER_ROOT,
+    exchange: Any | None = None,
 ) -> dict[str, Any]:
     report = sync_btc_data(
         data_path,
@@ -191,8 +185,7 @@ def check_status(
         timeframe=timeframe,
         repair=False,
         write=False,
-        runner_python=runner_python,
-        stater_root=stater_root,
+        exchange=exchange,
     )
     frame = load_csv(data_path)
     continuity = validate_5m_continuity(frame)
@@ -250,11 +243,10 @@ def scheduler_loop(
     pid_path: str | Path = DEFAULT_PID_PATH,
     symbol: str = DEFAULT_SYMBOL,
     timeframe: str = DEFAULT_TIMEFRAME,
-    runner_python: str = DEFAULT_RUNNER_PYTHON,
-    stater_root: str | Path = DEFAULT_STATER_ROOT,
     run_times: tuple[tuple[int, int], ...] = DEFAULT_RUN_TIMES,
 ) -> None:
     acquire_pid(Path(pid_path))
+    logging.info("BTC worker config: data=%s payload=%s", data_path, payload_path)
     stop = False
 
     def handle_stop(signum, frame):
@@ -272,8 +264,6 @@ def scheduler_loop(
                 state_path=state_path,
                 symbol=symbol,
                 timeframe=timeframe,
-                runner_python=runner_python,
-                stater_root=stater_root,
             )
             logging.info("initial update complete: %s", json.dumps(state["payload"], ensure_ascii=False))
         except Exception:
@@ -293,8 +283,6 @@ def scheduler_loop(
                     state_path=state_path,
                     symbol=symbol,
                     timeframe=timeframe,
-                    runner_python=runner_python,
-                    stater_root=stater_root,
                 )
                 logging.info("scheduled update complete: %s", json.dumps(state["payload"], ensure_ascii=False))
             except Exception:
@@ -317,8 +305,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-path", default=str(DEFAULT_LOG_PATH))
     parser.add_argument("--symbol", default=DEFAULT_SYMBOL)
     parser.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
-    parser.add_argument("--runner-python", default=DEFAULT_RUNNER_PYTHON)
-    parser.add_argument("--stater-root", default=DEFAULT_STATER_ROOT)
     args = parser.parse_args(argv)
 
     configure_logging(Path(args.log_path))
@@ -328,8 +314,6 @@ def main(argv: list[str] | None = None) -> int:
         "state_path": args.state_path,
         "symbol": args.symbol,
         "timeframe": args.timeframe,
-        "runner_python": args.runner_python,
-        "stater_root": args.stater_root,
     }
 
     if args.check:
