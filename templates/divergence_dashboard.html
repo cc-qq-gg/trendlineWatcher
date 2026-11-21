@@ -42,6 +42,7 @@
             cursor: pointer;
         }
         .btn:hover { border-color: #2563eb; }
+        .btn:disabled { opacity: .55; cursor: not-allowed; }
         .status {
             padding: 8px 12px;
             border-radius: 8px;
@@ -49,6 +50,16 @@
             border: 1px solid #e5e7eb;
             background: #ffffff;
             color: #374151;
+            max-width: 560px;
+        }
+        .section-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #4b5563;
         }
         .grid {
             display: grid;
@@ -62,127 +73,545 @@
             overflow: hidden;
             box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
         }
+        .card.dxy { margin-bottom: 14px; }
         .card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 10px 12px;
+            gap: 10px;
+            padding: 9px 12px;
             border-bottom: 1px solid #e5e7eb;
             background: #f8fafc;
+            flex-wrap: wrap;
         }
         .pair {
             font-weight: 700;
             font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .tag {
+            font-weight: 500;
+            font-size: 11px;
+            color: #2563eb;
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            border-radius: 999px;
+            padding: 1px 7px;
+        }
+        .tag.warn {
+            color: #b45309;
+            background: #fffbeb;
+            border-color: #fde68a;
         }
         .updated {
             font-size: 12px;
             color: #6b7280;
         }
+        .counts {
+            display: flex;
+            gap: 8px;
+            font-size: 12px;
+            color: #4b5563;
+            flex-wrap: wrap;
+        }
+        .counts b { font-weight: 700; }
+        .c-macd { color: #7c3aed; }
+        .c-tbl { color: #dc2626; }
+        .c-dbl { color: #16a34a; }
+        .c-w { color: #d97706; }
         .chart-wrap {
-            padding: 10px;
-            min-height: 280px;
+            padding: 6px 8px 8px;
+            position: relative;
         }
-        .chart-img {
-            width: 100%;
-            display: block;
-            border-radius: 8px;
-            border: 1px solid #e5e7eb;
-            background: #fff;
-        }
-        .placeholder {
-            height: 260px;
+        .chart { width: 100%; height: 340px; }
+        .chart.dxy { height: 300px; }
+        .chart-error {
+            height: 340px;
             display: flex;
             align-items: center;
             justify-content: center;
-            border: 1px dashed #d1d5db;
+            border: 1px dashed #fca5a5;
             border-radius: 8px;
-            color: #9ca3af;
+            color: #b91c1c;
             font-size: 13px;
+            background: #fef2f2;
+            text-align: center;
+            padding: 12px;
+        }
+        .legend {
+            padding: 0 12px 8px;
+            font-size: 12px;
+            color: #6b7280;
+            line-height: 1.6;
+            white-space: pre-line;
         }
         @media (max-width: 768px) {
             .container { padding: 10px; }
             .title { font-size: 18px; }
             .grid { grid-template-columns: 1fr; gap: 10px; }
-            .chart-wrap { min-height: 220px; padding: 8px; }
-            .placeholder { height: 200px; }
+            .chart { height: 300px; }
+            .chart.dxy { height: 220px; }
+            .status { max-width: 100%; }
         }
     </style>
+    <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 <div class="container">
     <div class="toolbar">
         <div class="title">Divergence Detector Dashboard</div>
         <div class="actions">
-            <button id="refreshBtn" class="btn">刷新图表</button>
+            <button id="refreshBtn" class="btn">刷新数据</button>
             <div id="status" class="status">准备就绪</div>
         </div>
     </div>
 
+    <div class="section-title">
+        美元指数周K + BTC 周K（各取最新 200 根）<span class="tag" id="dxyTag">加载中</span>
+    </div>
+    <div class="card dxy">
+        <div class="card-header">
+            <div class="pair">DXY 美元指数（右轴） · BTC（左轴） · 周K</div>
+            <div class="updated" id="dxyMeta">—</div>
+        </div>
+        <div class="chart-wrap">
+            <div class="chart dxy" id="dxyChart"></div>
+        </div>
+        <div class="legend" id="dxyLegend"></div>
+    </div>
+
+    <div class="section-title">币种背离（MACD 背离 + BOLL-W 信号 + MACD 副图）</div>
     <div id="grid" class="grid"></div>
 </div>
 
 <script>
+    const LWC = LightweightCharts;
     const gridEl = document.getElementById('grid');
     const statusEl = document.getElementById('status');
     const refreshBtn = document.getElementById('refreshBtn');
-    const isMobile = window.matchMedia('(max-width: 768px)').matches;
+    const el = (id) => document.getElementById(id);
+
+    // 只画旧 PNG 里有的东西：K线 + MACD 背离三角 + BOLL-W 圆圈 + MACD 副图。
+    // StochRSI 的 tbl/dbl 后端照旧计算并留在 CSV 里，但不画（旧图也没画）。
+    // 库自带 marker 的尺寸被内部钳到最小 12px，要更小只能用自定义 primitive 画。
+    const SIGNAL_STYLE = {
+        macd_top:        { color: '#7c3aed', apexUp: false, above: true },
+        macd_bottom:     { color: '#7c3aed', apexUp: true,  above: false },
+        boll_w:          { color: '#d97706', shape: 'circle', text: 'W' },
+        boll_break_up:   { color: '#f97316', apexUp: true,  above: true },
+        boll_break_down: { color: '#f97316', apexUp: false, above: false },
+    };
+
+    function drawArrow(ctx, X, Y, hr, vr, style) {
+        const half = 3.4 * hr;
+        const gap = 3 * vr;
+        const height = 6 * vr;
+        const inner = style.above ? Y - gap : Y + gap;
+        const outer = style.above ? Y - gap - height : Y + gap + height;
+        const apex = (style.apexUp === style.above) ? outer : inner;
+        const base = (style.apexUp === style.above) ? inner : outer;
+        ctx.beginPath();
+        ctx.moveTo(X, apex);
+        ctx.lineTo(X - half, base);
+        ctx.lineTo(X + half, base);
+        ctx.closePath();
+        ctx.fillStyle = style.color;
+        ctx.fill();
+    }
+
+    function createSignalPrimitive(chart, series, signals) {
+        return {
+            attached() {},
+            detached() {},
+            updateAllViews() {},
+            paneViews() {
+                return [{
+                    zOrder: () => 'top',
+                    renderer: () => ({
+                        draw: (target) => {
+                            const timeScale = chart.timeScale();
+                            target.useBitmapCoordinateSpace((scope) => {
+                                const ctx = scope.context;
+                                const hr = scope.horizontalPixelRatio;
+                                const vr = scope.verticalPixelRatio;
+                                signals.forEach((signal) => {
+                                    const style = SIGNAL_STYLE[signal.kind];
+                                    if (!style || signal.t === undefined) return;
+                                    // 单个坏标记不能把整张图（含副图）的绘制带崩
+                                    let x = null;
+                                    let y = null;
+                                    try {
+                                        x = timeScale.timeToCoordinate(signal.t);
+                                        y = series.priceToCoordinate(signal.price);
+                                    } catch (e) {
+                                        return;
+                                    }
+                                    if (x === null || y === null) return;
+                                    const X = Math.round(x * hr);
+                                    const Y = Math.round(y * vr);
+                                    if (style.shape === 'circle') {
+                                        const radius = 4.2 * hr;
+                                        ctx.beginPath();
+                                        ctx.arc(X, Y, radius, 0, Math.PI * 2);
+                                        ctx.fillStyle = style.color;
+                                        ctx.fill();
+                                        ctx.fillStyle = '#ffffff';
+                                        ctx.font = `700 ${Math.round(6.5 * hr)}px -apple-system, sans-serif`;
+                                        ctx.textAlign = 'center';
+                                        ctx.textBaseline = 'middle';
+                                        ctx.fillText(style.text, X, Y + 0.5 * vr);
+                                    } else {
+                                        drawArrow(ctx, X, Y, hr, vr, style);
+                                    }
+                                });
+                            });
+                        },
+                    }),
+                }];
+            },
+        };
+    }
+
+    const state = {
+        cards: [],
+        observer: null,
+        rendered: new Set(),
+    };
 
     function setStatus(text) {
         statusEl.textContent = text;
     }
 
-    function renderCards(cards) {
-        if (!cards || cards.length === 0) {
-            gridEl.innerHTML = '<div class="placeholder">暂无图表数据</div>';
+    async function getJSON(url, options) {
+        const resp = await fetch(url, options);
+        if (resp.status === 401) {
+            const body = await resp.json().catch(() => ({}));
+            if (body.redirect) window.location.href = body.redirect;
+            throw new Error(body.message || '需要登录');
+        }
+        const json = await resp.json();
+        if (!resp.ok) throw new Error(json.message || `请求失败: ${resp.status}`);
+        return json;
+    }
+
+    function chartOptions(extra) {
+        return Object.assign({
+            autoSize: true,
+            layout: {
+                background: { color: '#ffffff' },
+                textColor: '#4b5563',
+                fontSize: 11,
+                attributionLogo: false,
+            },
+            grid: { vertLines: { color: '#f3f4f6' }, horzLines: { color: '#f3f4f6' } },
+            rightPriceScale: { borderColor: '#e5e7eb' },
+            timeScale: {
+                borderColor: '#e5e7eb',
+                timeVisible: true,
+                secondsVisible: false,
+                rightOffset: 2,
+                // 默认 minBarSpacing=0.5 会把 fitContent 钳住（4H 有两千多根），必须放开
+                minBarSpacing: 0.01,
+            },
+            crosshair: { mode: LWC.CrosshairMode.Normal },
+        }, extra || {});
+    }
+
+    // null 值不能直接进 LineSeries，过滤成白空格
+    function toLine(times, values) {
+        const out = [];
+        for (let i = 0; i < times.length; i += 1) {
+            const v = values[i];
+            if (v !== null && v !== undefined) out.push({ time: times[i], value: v });
+        }
+        return out;
+    }
+
+    function buildCardChart(box, payload) {
+        const chart = LWC.createChart(box, chartOptions());
+
+        const candles = chart.addSeries(LWC.CandlestickSeries, {
+            upColor: '#ef5350', downColor: '#26a69a', borderVisible: false,
+            wickUpColor: '#ef5350', wickDownColor: '#26a69a',
+            // 价格线标签会和右侧最新值徽标叠成两条，这里只留最新值
+            priceLineVisible: false,
+            priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+        });
+        candles.setData(payload.bars.t.map((t, i) => ({
+            time: t,
+            open: payload.bars.open[i],
+            high: payload.bars.high[i],
+            low: payload.bars.low[i],
+            close: payload.bars.close[i],
+        })));
+
+        // 旧 PNG 主图没有布林带，这里也不画；BOLL 只以 W 信号点体现
+        // 副图：MACD 柱 + DIF/DEA
+        const macdHist = chart.addSeries(LWC.HistogramSeries, {
+            priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+            priceLineVisible: false,
+            lastValueVisible: false,
+        }, 1);
+        macdHist.setData(toLine(payload.bars.t, payload.ind.macd_hist).map((p) => ({
+            time: p.time,
+            value: p.value,
+            color: p.value >= 0 ? 'rgba(239,83,80,.55)' : 'rgba(38,166,154,.55)',
+        })));
+        const dif = chart.addSeries(LWC.LineSeries, {
+            color: '#3b82f6', lineWidth: 1, priceLineVisible: false, title: 'DIF',
+        }, 1);
+        dif.setData(toLine(payload.bars.t, payload.ind.macd));
+        const dea = chart.addSeries(LWC.LineSeries, {
+            color: '#f59e0b', lineWidth: 1, priceLineVisible: false, title: 'DEA',
+        }, 1);
+        dea.setData(toLine(payload.bars.t, payload.ind.macd_signal));
+
+        const panes = chart.panes();
+        if (panes.length > 1) {
+            panes[0].setStretchFactor(3);
+            panes[1].setStretchFactor(1);
+        }
+
+        // 标记自绘：库自带 marker 最小 12px，改不小；副图不再重复标注
+        candles.attachPrimitive(createSignalPrimitive(
+            chart,
+            candles,
+            payload.markers.filter((m) => SIGNAL_STYLE[m.kind]),
+        ));
+
+        chart.timeScale().fitContent();
+        return chart;
+    }
+
+    function buildDxyChart(box, dxy, btc) {
+        const chart = LWC.createChart(box, chartOptions({
+            leftPriceScale: { visible: true, borderColor: '#e5e7eb' },
+            timeScale: {
+                borderColor: '#e5e7eb', rightOffset: 2, minBarSpacing: 0.01,
+                // 周K不需要日级刻度，否则横轴会混进“16日”这种标签
+                tickMarkFormatter: (time) => {
+                    const d = new Date(time * 1000);
+                    const month = d.getUTCMonth() + 1;
+                    return month === 1 ? `${d.getUTCFullYear()}年` : `${month}月`;
+                },
+            },
+        }));
+
+        // DXY → 右轴（保持原配色）
+        if (dxy && dxy.success) {
+            const dxySeries = chart.addSeries(LWC.CandlestickSeries, {
+                upColor: '#ef5350', downColor: '#26a69a', borderVisible: false,
+                wickUpColor: '#ef5350', wickDownColor: '#26a69a',
+                priceLineVisible: false,
+                priceFormat: { type: 'price', precision: 3, minMove: 0.001 },
+            });
+            dxySeries.setData(dxy.bars.map((b) => ({
+                time: b.t, open: b.o, high: b.h, low: b.l, close: b.c,
+            })));
+        }
+
+        // BTC → 左轴：与 DXY 差 500 倍，共用一根轴会把 DXY 压成一条直线
+        if (btc && btc.success) {
+            const btcSeries = chart.addSeries(LWC.CandlestickSeries, {
+                upColor: '#f7931a', downColor: '#7f1d1d', borderVisible: false,
+                wickUpColor: '#f7931a', wickDownColor: '#7f1d1d',
+                priceLineVisible: false,
+                priceScaleId: 'left',
+                priceFormat: { type: 'price', precision: 0, minMove: 1 },
+            });
+            btcSeries.setData(btc.bars.map((b) => ({
+                time: b.t, open: b.o, high: b.h, low: b.l, close: b.c,
+            })));
+        }
+
+        chart.timeScale().fitContent();
+        return chart;
+    }
+
+    const WEEKLY_SOURCE = {
+        cnbc: 'ICE 直连 · CNBC',
+        ecb_synthetic: 'ECB 合成（非交易所报价）',
+        okx: 'OKX 周K',
+        cache: '缓存',
+    };
+
+    function weeklyNote(label, dataset, axisLabel) {
+        if (!dataset || !dataset.success || !dataset.bars.length) {
+            return `${label}（${axisLabel}）不可用${dataset && dataset.message ? `：${dataset.message}` : ''}`;
+        }
+        const bars = dataset.bars;
+        const fmt = (t) => new Date(t * 1000).toISOString().slice(0, 10);
+        const first = bars[0].c;
+        const last = bars[bars.length - 1].c;
+        const pct = first ? ((last / first - 1) * 100) : 0;
+        const parts = [
+            `${fmt(bars[0].t)} → ${fmt(bars[bars.length - 1].t)}`,
+            `${bars.length} 周`,
+            WEEKLY_SOURCE[dataset.source] || dataset.source,
+            dataset.partial_last ? '末根进行中' : '末根已收',
+            `区间 ${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`,
+            dataset.stale ? '缓存已过期' : '',
+            dataset.message || '',
+        ].filter(Boolean);
+        return `${label}（${axisLabel}）${parts.join(' · ')}`;
+    }
+
+    function renderDxy(dxy, btc) {
+        const box = el('dxyChart');
+        const tag = el('dxyTag');
+        const okDxy = !!(dxy && dxy.success);
+        const okBtc = !!(btc && btc.success);
+
+        if (!okDxy && !okBtc) {
+            tag.textContent = '不可用';
+            tag.className = 'tag warn';
+            el('dxyMeta').textContent = '—';
+            el('dxyLegend').textContent = (dxy && dxy.message) || (btc && btc.message) || '周K数据暂不可用';
+            box.className = 'chart-error';
+            box.textContent = (dxy && dxy.message) || (btc && btc.message) || '周K数据暂不可用';
             return;
         }
 
-        gridEl.innerHTML = cards.map(card => {
-            const imgUrl = isMobile ? card.mobile_image_url : card.desktop_image_url;
-            const updated = card.updated_at || 'N/A';
+        // 只有一条可用时也照画，另一条在图例里说明原因
+        tag.textContent = okDxy && okBtc ? 'DXY + BTC' : (okDxy ? '仅 DXY' : '仅 BTC');
+        tag.className = (okDxy && okBtc) ? 'tag' : 'tag warn';
+
+        const dxyCount = okDxy ? dxy.bars.length : 0;
+        const btcCount = okBtc ? btc.bars.length : 0;
+        const fetched = (okDxy && dxy.fetched_at) || (okBtc && btc.fetched_at) || '—';
+        const from = (okBtc && btc.window && btc.window.from) || (okDxy && dxy.window && dxy.window.from) || '—';
+        const to = (okBtc && btc.window && btc.window.to) || (okDxy && dxy.window && dxy.window.to) || '—';
+        el('dxyMeta').textContent =
+            `${from} → ${to} · DXY ${dxyCount} 周 / BTC ${btcCount} 周 · 缓存 ${fetched}`;
+
+        el('dxyLegend').textContent = [
+            weeklyNote('DXY 美元指数', dxy, '右轴'),
+            weeklyNote('BTC', btc, '左轴'),
+            '周锚点统一为周一（DXY 原按周日收盘，已前移 6 天）',
+        ].join('\n');
+
+        buildDxyChart(box, dxy, btc);
+    }
+
+    function countsHtml(counts) {
+        if (!counts) return '';
+        return `
+            <span class="c-macd">MACD <b>${counts.macd_top}/${counts.macd_bottom}</b></span>
+            <span class="c-w">W <b>${counts.boll_w}</b></span>
+        `;
+    }
+
+    function ageBadge(meta) {
+        const hours = meta && meta.data_age_hours;
+        if (hours === null || hours === undefined) return '';
+        // 末根未走完是常态，用中性标签；只有明显落后才告警
+        if (hours < 0) return '<span class="tag">末根进行中</span>';
+        if (hours > 6) {
+            const days = Math.round(hours / 24);
+            return `<span class="tag warn">数据滞 ${days > 0 ? days + ' 天' : Math.round(hours) + ' 小时'}</span>`;
+        }
+        return '';
+    }
+
+    function renderCards(cards) {
+        if (!cards || cards.length === 0) {
+            gridEl.innerHTML = '<div class="chart-error">暂无图表数据</div>';
+            return;
+        }
+        gridEl.innerHTML = cards.map((card, index) => {
+            if (!card.success) {
+                return `
+                    <div class="card" data-index="${index}">
+                        <div class="card-header">
+                            <div class="pair">${card.symbol} ${card.timeframe}</div>
+                            <div class="counts">${card.message || '数据缺失'}</div>
+                        </div>
+                        <div class="chart-wrap"><div class="chart-error">${card.message || '数据缺失'}</div></div>
+                    </div>`;
+            }
             return `
-                <div class="card">
+                <div class="card" data-index="${index}">
                     <div class="card-header">
-                        <div class="pair">${card.symbol} ${card.timeframe}</div>
-                        <div class="updated">更新: ${updated}</div>
+                        <div class="pair">${card.symbol} ${card.timeframe}${ageBadge(card)}</div>
+                        <div class="counts">${countsHtml(card.counts)}</div>
                     </div>
-                    <div class="chart-wrap">
-                        <img class="chart-img" src="${imgUrl}" alt="${card.symbol} ${card.timeframe} divergence" loading="lazy" />
+                    <div class="card-header" style="border-top:0;background:#fff;">
+                        <div class="updated">${card.from} → ${card.to} · ${card.count} 根 · 北京时间</div>
+                        <div class="updated">更新 ${card.updated_at}</div>
                     </div>
-                </div>
-            `;
+                    <div class="chart-wrap"><div class="chart" data-slot="${index}"></div></div>
+                </div>`;
         }).join('');
+    }
+
+    function loadCardData(index) {
+        const card = state.cards[index];
+        if (!card || !card.success) return Promise.resolve(null);
+        const url = `/api/divergence/chart/${encodeURIComponent(card.symbol)}/${encodeURIComponent(card.timeframe)}`;
+        return getJSON(url).then((payload) => {
+            if (!payload.success) throw new Error(payload.message || '加载失败');
+            return payload;
+        });
+    }
+
+    async function renderSlot(index) {
+        if (state.rendered.has(index)) return;
+        const slot = gridEl.querySelector(`[data-slot="${index}"]`);
+        if (!slot) return;
+        state.rendered.add(index);
+        try {
+            const payload = await loadCardData(index);
+            if (!payload) return;
+            buildCardChart(slot, payload);
+        } catch (err) {
+            console.error(err);
+            const wrap = slot.parentElement;
+            wrap.innerHTML = `<div class="chart-error">${err.message}</div>`;
+        }
+    }
+
+    function observeCards() {
+        if (state.observer) state.observer.disconnect();
+        // 4H 卡有两千多根K线，等卡片进入视口再建图，避免一次性建 6 个 chart
+        state.observer = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+                if (!entry.isIntersecting) return;
+                const index = Number(entry.target.dataset.slot);
+                renderSlot(index);
+                state.observer.unobserve(entry.target);
+            });
+        }, { rootMargin: '200px 0px' });
+        gridEl.querySelectorAll('[data-slot]').forEach((node) => state.observer.observe(node));
     }
 
     async function loadOverview() {
         setStatus('检查并加载中...');
         try {
-            const resp = await fetch('/api/divergence/overview');
-            const json = await resp.json();
-            if (!json.success) {
-                throw new Error(json.message || '加载失败');
-            }
-            renderCards(json.data || []);
+            const json = await getJSON('/api/divergence/overview');
+            state.cards = json.data || [];
+            state.rendered = new Set();
+            renderDxy(json.dxy, json.btc_weekly);
+            renderCards(state.cards);
+            observeCards();
 
-            const refreshInfo = json.refresh || {};
-            if (refreshInfo.updated) {
-                setStatus('已触发更新并加载完成');
-            } else {
-                setStatus('数据已是4小时内最新');
-            }
+            const updated = json.refresh && json.refresh.updated;
+            const dxyCount = json.dxy && json.dxy.success ? json.dxy.bars.length : 0;
+            const btcCount = json.btc_weekly && json.btc_weekly.success ? json.btc_weekly.bars.length : 0;
+            setStatus(`${updated ? '已触发更新 · ' : ''}${state.cards.length} 张图 · 周K DXY ${dxyCount} / BTC ${btcCount}`);
         } catch (err) {
             console.error(err);
             setStatus('加载失败: ' + err.message);
-            gridEl.innerHTML = '<div class="placeholder">加载失败，请稍后重试</div>';
+            gridEl.innerHTML = `<div class="chart-error">加载失败：${err.message}</div>`;
         }
     }
 
     async function forceRefresh() {
         refreshBtn.disabled = true;
-        setStatus('正在强制刷新，请稍候...');
+        setStatus('正在刷新数据，请稍候...');
         try {
-            const resp = await fetch('/api/divergence/refresh', { method: 'POST' });
-            const json = await resp.json();
+            const json = await getJSON('/api/divergence/refresh', { method: 'POST' });
             if (!json.success) {
                 throw new Error(json.message || '刷新失败');
             }

@@ -8,7 +8,7 @@ import json
 import uuid
 import hashlib
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from TrendlineManager import TrendlineManager, validate_trendline_config
 from TrendlineMonitor import TrendlineMonitor, get_global_monitor
 from Function import ccxt_fetch_candle_data, fetch_okex_symbol_history_candle_data
@@ -76,7 +76,11 @@ DIVERGENCE_CONFIG = {
     'timeframes': ['4h', '1d'],
     'max_age_hours': 4,
     'mobile_limit_bars': 400,
-    'output_dir': os.path.join('divergence_visualizer', 'output')
+    'output_dir': os.path.join('divergence_visualizer', 'output'),
+    # 顶部对比图：美元指数与 BTC 各取最新 N 根周K
+    'weekly_bars': 200,
+    # 页面最小展示 4h，取数也以 4H 为基础周期，1D/1W 由 4H 聚合
+    'base_timeframe': '4H',
 }
 
 _divergence_refresh_lock = threading.Lock()
@@ -123,15 +127,51 @@ def _write_divergence_state(state: dict):
 
 
 def _has_missing_divergence_assets() -> bool:
+    """前端图表化后以 CSV 为准：图片不再生成，缺失判断也随之下移。"""
+    from divergence_visualizer import payload as divergence_payload
 
     for symbol in DIVERGENCE_CONFIG['symbols']:
         for timeframe in DIVERGENCE_CONFIG['timeframes']:
-            desktop_path = _divergence_image_path(symbol, timeframe, mobile=False)
-            mobile_path = _divergence_image_path(symbol, timeframe, mobile=True)
-            for path in [desktop_path, mobile_path]:
-                if not os.path.exists(path):
-                    return True
+            if not os.path.exists(divergence_payload.signals_path(symbol, timeframe)):
+                return True
     return False
+
+
+def _align_weekly_anchor(inst_id: str, force: bool = False) -> dict:
+    """把周K锚点统一到所在周的周一。
+
+    DXY 的周K按周日收盘标注（W-SUN），BTC 的 OKX 周K按周一开始；
+    若直接叠加，两套时间点会互相错开一个槽位，导致 K 线交替排列。
+    DXY 前移 6 天到该周周一后，两边时间点一一对应。
+    """
+    from divergence_visualizer import dxy as dxy_provider
+    from divergence_visualizer import weekly as weekly_provider
+
+    limit = DIVERGENCE_CONFIG['weekly_bars']
+    if inst_id == 'DXY':
+        data = dxy_provider.get_weekly_bars(limit=limit, force=force)
+    else:
+        data = weekly_provider.get_btc_weekly(limit=limit, force=force)
+
+    for bar in data.get('bars') or []:
+        day = datetime.fromtimestamp(bar['t'], timezone.utc)
+        bar['t'] -= day.weekday() * 86400
+    data['anchor'] = 'monday'
+
+    bars = data.get('bars') or []
+    data['window'] = {
+        'from': datetime.fromtimestamp(bars[0]['t'], timezone.utc).strftime('%Y-%m-%d') if bars else None,
+        'to': datetime.fromtimestamp(bars[-1]['t'], timezone.utc).strftime('%Y-%m-%d') if bars else None,
+    }
+    return data
+
+
+def _weekly_payload(force_dxy: bool = False, force_btc: bool = False) -> dict:
+    """顶部对比图数据：美元指数与 BTC 各取最新 weekly_bars 根周K，锚点统一到周一。"""
+    return {
+        'dxy': _align_weekly_anchor('DXY', force=force_dxy),
+        'btc_weekly': _align_weekly_anchor('BTC', force=force_btc),
+    }
 
 
 def refresh_divergence_assets(force: bool = False) -> dict:
@@ -177,8 +217,11 @@ def refresh_divergence_assets(force: bool = False) -> dict:
                     generate_detector_assets(
                         symbol=symbol,
                         timeframe=timeframe,
-                        mobile_limit=DIVERGENCE_CONFIG['mobile_limit_bars'],
-                        required_days=90
+                        required_days=90,
+                        # 页面已改为前端 lightweight-charts 渲染，只产出 CSV
+                        render_plots=False,
+                        include_mobile=False,
+                        base_timeframe=DIVERGENCE_CONFIG['base_timeframe'],
                     )
                     updated = True
                     result['details'].append({'symbol': symbol, 'timeframe': timeframe, 'success': True})
@@ -1554,44 +1597,66 @@ def refresh_stochrsi_data():
 @app.route('/api/divergence/overview', methods=['GET'])
 @require_auth
 def divergence_overview():
-    """获取Divergence图片概览，访问时兜底刷新"""
+    """获取Divergence卡片元数据 + 周K对比图（DXY / BTC），访问时兜底刷新"""
     try:
         refresh_info = ensure_divergence_fresh()
 
-        cards = []
-        now_ts = time.time()
-        for symbol in DIVERGENCE_CONFIG['symbols']:
-            for timeframe in DIVERGENCE_CONFIG['timeframes']:
-                desktop_filename = _divergence_image_filename(symbol, timeframe, mobile=False)
-                mobile_filename = _divergence_image_filename(symbol, timeframe, mobile=True)
-                desktop_path = _divergence_image_path(symbol, timeframe, mobile=False)
-                mtime = os.path.getmtime(desktop_path) if os.path.exists(desktop_path) else None
-                age_minutes = int((now_ts - mtime) / 60) if mtime else None
+        from divergence_visualizer import payload as divergence_payload
 
-                cards.append({
-                    'symbol': symbol,
-                    'timeframe': timeframe.upper(),
-                    'desktop_image_url': f"/api/divergence/image/{desktop_filename}",
-                    'mobile_image_url': f"/api/divergence/image/{mobile_filename}",
-                    'updated_at': datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S') if mtime else '',
-                    'age_minutes': age_minutes
-                })
+        cards = [
+            divergence_payload.build_card_meta(symbol, timeframe)
+            for symbol in DIVERGENCE_CONFIG['symbols']
+            for timeframe in DIVERGENCE_CONFIG['timeframes']
+        ]
+
+        weekly = _weekly_payload()
 
         return jsonify({
             'success': True,
             'data': cards,
+            'dxy': weekly['dxy'],
+            'btc_weekly': weekly['btc_weekly'],
             'refresh': refresh_info
         })
     except Exception as e:
         return jsonify({'success': False, 'message': f'获取Divergence概览失败: {str(e)}'}), 500
 
 
+@app.route('/api/divergence/chart/<symbol>/<timeframe>', methods=['GET'])
+@require_auth
+def divergence_chart(symbol, timeframe):
+    """单个卡片的K线 + 指标 + 标记（口径与 detector_*_signals.csv 完全一致）"""
+    timeframe = timeframe.lower()
+    if timeframe not in DIVERGENCE_CONFIG['timeframes']:
+        return jsonify({'success': False, 'message': f'不支持的周期: {timeframe}'}), 400
+
+    from divergence_visualizer import payload as divergence_payload
+
+    payload = divergence_payload.build_chart_payload(symbol.upper(), timeframe)
+    return jsonify(payload), (200 if payload.get('success') else 404)
+
+
+@app.route('/api/divergence/dxy', methods=['GET'])
+@require_auth
+def divergence_dxy():
+    """周K对比图：美元指数 + BTC，各取最新 200 根"""
+    force = request.args.get('force') == '1'
+    weekly = _weekly_payload(force_dxy=force, force_btc=force)
+    return jsonify({
+        'success': bool(weekly['dxy'].get('success') or weekly['btc_weekly'].get('success')),
+        'dxy': weekly['dxy'],
+        'btc_weekly': weekly['btc_weekly'],
+    })
+
+
 @app.route('/api/divergence/refresh', methods=['POST'])
 @require_auth
 def divergence_refresh():
-    """手动刷新Divergence图片"""
+    """手动刷新Divergence数据（CSV + 周K缓存）"""
     try:
         result = refresh_divergence_assets(force=True)
+        _weekly_payload(force_dxy=True, force_btc=True)
+
         return jsonify({
             'success': result['success'],
             'message': 'Divergence刷新完成' if result['success'] else 'Divergence刷新部分失败',

@@ -87,37 +87,37 @@ def detect_bottom_divergence(df):
 def save_data(df, tbl_points, dbl_points, save_path):
     """保存数据到CSV，包含背离标记"""
     df_save = df.copy()
-    
+
     # 添加背离标记列
     df_save['tbl'] = np.nan  # 顶背离标记
     df_save['dbl'] = np.nan  # 底背离标记
-    
+
     # 标记背离点
     for idx in tbl_points.index:
         df_save.loc[idx, 'tbl'] = -1
     for idx in dbl_points.index:
         df_save.loc[idx, 'dbl'] = 1
-    
+
     # 删除临时列
     if 'turn' in df_save.columns:
         df_save = df_save.drop(columns=['turn'])
-    
+
     df_save.to_csv(save_path, index=False)
     print(f"已保存数据: {save_path}")
 
 
 def plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, save_path):
     """使用mplfinance快速绘制K线图并标注背离点"""
-    
+
     # 准备mplfinance格式的数据
     df_plot = df.copy()
     df_plot = df_plot.set_index('candle_begin_time')
-    
+
     macd_hist_colors = [
         'red' if pd.notna(value) and value >= 0 else 'green'
         for value in df_plot['macd_hist'].values
     ]
-    
+
     # 创建附加图层
     addplots = [
         mpf.make_addplot(
@@ -127,7 +127,7 @@ def plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, save_pat
         mpf.make_addplot(df_plot['macd'].values, panel=1, color='#4da3ff', width=1),
         mpf.make_addplot(df_plot['macd_signal'].values, panel=1, color='#f0a14b', width=1),
     ]
-    
+
     # 创建自定义样式 - 包含中文字体支持
     mc = mpf.make_marketcolors(
         up='red', down='green',
@@ -146,7 +146,7 @@ def plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, save_pat
             'font.family': 'sans-serif'
         }
     )
-    
+
     # 绘制图表
     fig, axes = mpf.plot(
         df_plot,
@@ -160,7 +160,7 @@ def plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, save_pat
         panel_ratios=(3, 1),
         returnfig=True
     )
-    
+
     ax1 = axes[0]  # K线图
     ax3 = axes[2]  # MACD图
 
@@ -194,12 +194,12 @@ def plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, save_pat
         price = df_plot.loc[t, 'Close']
         ax1.scatter(pos, price, marker='o', s=80, c='orange', zorder=12)
         ax1.text(pos, price, 'W', color='black', fontsize=7, ha='center', va='center', zorder=13)
-    
+
     # 添加图例
     ax1.legend(['up ▼', 'down ▲'], loc='upper left')
-    
+
     plt.tight_layout()
-    
+
     return fig, axes
 
 
@@ -230,31 +230,36 @@ def resolve_data_dir(data_dir=None):
     return os.path.abspath(os.path.join(PROJECT_ROOT, data_dir))
 
 
-def process_symbol(symbol, timeframe, data_dir=None, show_interactive=False, limit_bars=None, output_suffix=''):
+def process_symbol(symbol, timeframe, data_dir=None, show_interactive=False, limit_bars=None,
+                   output_suffix='', render_plots=True, base_timeframe='4H'):
     """处理单个品种和周期
-    
+
     Args:
         symbol: 币种符号 (BTC, ETH, SOL)
         timeframe: 时间周期 (4h, 1d, 1w)
         data_dir: 数据目录
         show_interactive: 是否显示交互式图表（可放大缩小）
         limit_bars: 限制K线数量，None表示不限制
+        render_plots: 是否渲染PNG；前端图表化后只需要CSV，可关掉省一次mplfinance开销
+        base_timeframe: 本地基础周期文件。默认 4H（页面最小展示周期），
+            只有直接看 15m 的场景才需要传 '15m'
     """
-    
-    # 使用15m数据，然后resample到目标周期
+
+    # 以 base_timeframe 为唯一事实源，只用聚合得到更粗的周期
     data_dir_resolved = resolve_data_dir(data_dir)
-    csv_path = os.path.join(data_dir_resolved, f'{symbol}-USDT-SWAP_15m.csv')
-    
+    base_tf = base_timeframe.upper()
+    csv_path = os.path.join(data_dir_resolved, f'{symbol}-USDT-SWAP_{base_tf}.csv')
+
     if not os.path.exists(csv_path):
         print(f"文件不存在: {csv_path}")
         return None
-    
+
     # 读取数据
     df = pd.read_csv(csv_path, index_col='candle_begin_time', parse_dates=True)
     df.columns = [c.capitalize() for c in df.columns]
-    
+
     # Resample到目标周期
-    if timeframe != '15m':
+    if timeframe.upper() != base_tf:
         df = df.resample(timeframe, label='left', closed='left').agg({
             'Open': 'first',
             'High': 'max',
@@ -262,17 +267,17 @@ def process_symbol(symbol, timeframe, data_dir=None, show_interactive=False, lim
             'Close': 'last',
             'Volume': 'sum'
         }).dropna()
-    
+
     df = df.reset_index()
-    
+
     # 统一列名（时间列保持小写，其他列首字母大写）
-    df.columns = ['candle_begin_time' if 'candle_begin_time' in c.lower() else c.capitalize() 
+    df.columns = ['candle_begin_time' if 'candle_begin_time' in c.lower() else c.capitalize()
                   for c in df.columns]
-    
+
     # 限制K线数量
     if limit_bars and len(df) > limit_bars:
         df = df.tail(limit_bars).reset_index(drop=True)
-    
+
     # 计算StochRSI
     stochrsi, _ = StochRSI(df['Close'].tolist(), m=14, p=3)
     df['stochrsi'] = stochrsi
@@ -280,11 +285,11 @@ def process_symbol(symbol, timeframe, data_dir=None, show_interactive=False, lim
     # 复用预警指标，保证图表和邮件一致。
     df = add_boll_indicators(df, width=boll_width_threshold_for_timeframe(timeframe))
     df = add_macd_indicators(df)
-    
+
     # 检测背离
     tbl_points = detect_top_divergence(df)
     dbl_points = detect_bottom_divergence(df)
-    
+
     # 输出统计
     print(f"\n{'='*50}")
     print(f"{symbol} {timeframe}")
@@ -292,26 +297,30 @@ def process_symbol(symbol, timeframe, data_dir=None, show_interactive=False, lim
     print(f"K线数量: {len(df)}")
     print(f"顶背离数量: {len(tbl_points)}")
     print(f"底背离数量: {len(dbl_points)}")
-    
+
     # 显示最近的背离
     if len(tbl_points) > 0:
         print(f"\n最近顶背离:")
         for idx, row in tbl_points.tail(5).iterrows():
             print(f"  {row['candle_begin_time']}: 价格={row['High']:.2f}, StochRSI={row['stochrsi']:.2f}")
-    
+
     if len(dbl_points) > 0:
         print(f"\n最近底背离:")
         for idx, row in dbl_points.tail(5).iterrows():
             print(f"  {row['candle_begin_time']}: 价格={row['Low']:.2f}, StochRSI={row['stochrsi']:.2f}")
-    
+
     data_path, img_path = get_output_paths(symbol, timeframe, suffix=output_suffix)
 
     # 保存数据到CSV
     save_data(df, tbl_points, dbl_points, data_path)
-    
+
+    # 前端直接用CSV出图时跳过绘图
+    if not render_plots:
+        return tbl_points, dbl_points
+
     # 绘图
     fig, axes = plot_divergence_fast(df, tbl_points, dbl_points, symbol, timeframe, img_path)
-    
+
     if show_interactive:
         print(f"\n显示交互式图表（可放大缩小）...")
         plt.show()
@@ -319,15 +328,23 @@ def process_symbol(symbol, timeframe, data_dir=None, show_interactive=False, lim
         plt.savefig(img_path, dpi=150, bbox_inches='tight')
         plt.close()
         print(f"已保存图片: {img_path}")
-    
+
     return tbl_points, dbl_points
 
 
-def generate_detector_assets(symbol: str, timeframe: str, mobile_limit: int = 200, required_days: int = 90):
+def generate_detector_assets(symbol: str, timeframe: str, mobile_limit: int = 200, required_days: int = 90,
+                             render_plots: bool = True, include_mobile: bool = True,
+                             base_timeframe: str = "4H"):
     """生成桌面版和移动版背离图。
 
     - 桌面图: detector_{COIN}_{TF}_overview.png
-    - 移动图: detector_{COIN}_{TF}_overview_mobile.png（最多 mobile_limit 根K线）
+    - 移动图: detector_{COIN}_{TF}_overview_mobile.png（最多 mobile_limit 根K线 ）
+
+    前端图表化后，网页刷新链可以传 render_plots=False / include_mobile=False，
+    此时只产出 detector_{COIN}_{TF}_signals.csv。
+
+    base_timeframe 默认 4H：页面最小只展示 4H，直接抓 4H 再聚合 1D/1W，
+    请求量是 15m 口径的 1/16，也不受 15m 数据缺口影响。
     """
     symbol = symbol.upper()
     timeframe = timeframe.lower()
@@ -339,26 +356,32 @@ def generate_detector_assets(symbol: str, timeframe: str, mobile_limit: int = 20
         timeframe=timeframe.upper(),
         required_days=required_days,
         verbose=False,
+        base_timeframe=base_timeframe,
     )
 
     data_dir = resolve_data_dir()
 
-    # 桌面图
-    process_symbol(symbol, timeframe, data_dir=data_dir, show_interactive=False, limit_bars=None, output_suffix='')
-    # 移动图（限制K线数量）
-    process_symbol(symbol, timeframe, data_dir=data_dir, show_interactive=False, limit_bars=mobile_limit, output_suffix='_mobile')
+    # 桌面版
+    process_symbol(symbol, timeframe, data_dir=data_dir, show_interactive=False, limit_bars=None,
+                   output_suffix='', render_plots=render_plots, base_timeframe=base_timeframe)
+    # 移动版（限制K线数量）
+    if include_mobile:
+        process_symbol(symbol, timeframe, data_dir=data_dir, show_interactive=False,
+                       limit_bars=mobile_limit, output_suffix='_mobile', render_plots=render_plots,
+                       base_timeframe=base_timeframe)
 
 
-def view_interactive(symbol='BTC', timeframe='4h', limit_bars=500, data_dir=None):
+def view_interactive(symbol='BTC', timeframe='4h', limit_bars=500, data_dir=None, base_timeframe='4H'):
     """
     交互式查看单个品种的背离图表（可放大缩小）
-    
+
     Args:
         symbol: 币种符号，默认 BTC
         timeframe: 时间周期，默认 4h
         limit_bars: 显示的K线数量，默认500（太多会很卡）
         data_dir: 数据目录
-    
+        base_timeframe: 本地基础周期，默认 4H
+
     使用方法:
         python -c "from divergence_detector import view_interactive; view_interactive('BTC', '4h')"
     或在脚本中:
@@ -366,27 +389,28 @@ def view_interactive(symbol='BTC', timeframe='4h', limit_bars=500, data_dir=None
     """
     print(f"\n交互式查看: {symbol} {timeframe}")
     print("提示: 图表窗口中可以使用工具栏放大、缩小、平移")
-    
-    process_symbol(symbol, timeframe, data_dir, show_interactive=True, limit_bars=limit_bars)
+
+    process_symbol(symbol, timeframe, data_dir, show_interactive=True, limit_bars=limit_bars,
+                   base_timeframe=base_timeframe)
 
 
 def main():
     """主函数"""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='顶背离/底背离检测工具')
     parser.add_argument('--symbol', '-s', default=None, help='单独查看某个币种 (BTC/ETH/SOL)')
     parser.add_argument('--timeframe', '-t', default='4h', help='时间周期 (4h/1d)')
     parser.add_argument('--interactive', '-i', action='store_true', help='交互式显示（可放大缩小）')
     parser.add_argument('--limit', '-l', type=int, default=500, help='K线数量限制（交互模式建议500以内）')
-    
+
     args = parser.parse_args()
-    
+
     if args.symbol:
         # 单独查看某个币种
         process_symbol(
-            args.symbol, 
-            args.timeframe, 
+            args.symbol,
+            args.timeframe,
             show_interactive=args.interactive,
             limit_bars=args.limit
         )
@@ -394,27 +418,27 @@ def main():
         # 批量处理所有币种
         symbols = ['BTC', 'ETH', 'SOL']
         timeframes = ['4h', '1d']
-        
+
         print("="*60)
         print("顶背离/底背离检测工具")
         print("="*60)
-        
+
         all_results = {}
-        
+
         for symbol in symbols:
             for tf in timeframes:
                 result = process_symbol(symbol, tf, show_interactive=False)
                 if result:
                     all_results[f"{symbol}_{tf}"] = result
-        
+
         # 汇总统计
         print("\n" + "="*60)
         print("汇总统计")
         print("="*60)
-        
+
         for key, (tbl, dbl) in all_results.items():
             print(f"{key}: 顶背离={len(tbl)}, 底背离={len(dbl)}")
-        
+
         print(f"\n所有文件已保存到: {OUTPUT_DIR}")
 
 

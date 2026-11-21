@@ -126,7 +126,7 @@ def test_process_symbol_outputs_boll_and_macd_columns(tmp_path, monkeypatch):
     close = 100 + np.sin(np.arange(rows) / 3) * 5 + np.arange(rows) * 0.05
     frame = pd.DataFrame(
         {
-            "candle_begin_time": pd.date_range("2026-01-01", periods=rows, freq="15min"),
+            "candle_begin_time": pd.date_range("2026-01-01", periods=rows, freq="4h"),
             "open": close,
             "high": close + 1,
             "low": close - 1,
@@ -134,19 +134,19 @@ def test_process_symbol_outputs_boll_and_macd_columns(tmp_path, monkeypatch):
             "volume": np.ones(rows),
         }
     )
-    frame.to_csv(data_dir / "BTC-USDT-SWAP_15m.csv", index=False)
+    frame.to_csv(data_dir / "BTC-USDT-SWAP_4H.csv", index=False)
     monkeypatch.setattr(detector, "OUTPUT_DIR", str(output_dir))
 
     detector.process_symbol(
         "BTC",
-        "15m",
+        "4h",
         data_dir=str(data_dir),
         show_interactive=False,
         limit_bars=None,
     )
 
-    csv_path = output_dir / "detector_BTC_15M_signals.csv"
-    image_path = output_dir / "detector_BTC_15M_overview.png"
+    csv_path = output_dir / "detector_BTC_4H_signals.csv"
+    image_path = output_dir / "detector_BTC_4H_overview.png"
     saved = pd.read_csv(csv_path)
 
     assert image_path.exists()
@@ -205,7 +205,7 @@ def test_process_symbol_uses_daily_boll_width_threshold(tmp_path, monkeypatch):
     close = 100 + np.sin(np.arange(rows) / 3)
     frame = pd.DataFrame(
         {
-            "candle_begin_time": pd.date_range("2026-01-01", periods=rows, freq="15min"),
+            "candle_begin_time": pd.date_range("2026-01-01", periods=rows, freq="4h"),
             "open": close,
             "high": close + 1,
             "low": close - 1,
@@ -213,7 +213,7 @@ def test_process_symbol_uses_daily_boll_width_threshold(tmp_path, monkeypatch):
             "volume": np.ones(rows),
         }
     )
-    frame.to_csv(data_dir / "BTC-USDT-SWAP_15m.csv", index=False)
+    frame.to_csv(data_dir / "BTC-USDT-SWAP_4H.csv", index=False)
     monkeypatch.setattr(detector, "OUTPUT_DIR", str(output_dir))
     monkeypatch.setattr(detector, "plot_divergence_fast", lambda *args, **kwargs: (None, None))
     monkeypatch.setattr(detector.plt, "savefig", lambda path, *args, **kwargs: Path(path).touch())
