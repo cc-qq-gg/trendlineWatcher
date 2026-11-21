@@ -40,6 +40,8 @@ AGENTS.md
 output/
 risk_order_client.py
 
-pm2 start python --name "monitor" -- TrendlineMonitor.py
-pm2 start python --name "web" -- TrendlineWebApp.py
-pm2 start python --name "watcher_stochrsi" -- watcher_stochrsi.py
+# 未部署的本地独立模块（pattern_scan / trend_mark），模块与测试成对忽略
+pattern_scan/
+trend_mark/
+tests/test_pattern_scan_*.py
+tests/test_trend_mark_*.py
