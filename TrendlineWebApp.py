@@ -84,6 +84,11 @@ DIVERGENCE_CONFIG = {
 }
 
 _divergence_refresh_lock = threading.Lock()
+_divergence_background_thread = None
+# running 标记的有效期：超过这个时长视为上次进程异常退出留下的脏标记
+REFRESH_RUNNING_TTL_SECONDS = 600
+# 后台刷新延后启动：先把请求线程的响应让出去，避免 numpy/talib 抢 GIL 拖慢首屏
+BACKGROUND_REFRESH_DELAY_SECONDS = 0.5
 
 
 def _normalize_tf(tf: str) -> str:
@@ -122,8 +127,11 @@ def _read_divergence_state() -> dict:
 
 def _write_divergence_state(state: dict):
     path = _divergence_state_path()
-    with open(path, 'w', encoding='utf-8') as f:
+    # 后台线程写、请求线程读，先写临时文件再替换，避免读到半个 JSON
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
 
 
 def _has_missing_divergence_assets() -> bool:
@@ -174,50 +182,96 @@ def _weekly_payload(force_dxy: bool = False, force_btc: bool = False) -> dict:
     }
 
 
-def refresh_divergence_assets(force: bool = False) -> dict:
-    """刷新背离可视化产物（桌面+移动）"""
-    state = _read_divergence_state()
-    current_bucket = _current_4h_bucket()
+def _refresh_running(state: dict) -> bool:
+    """state 里的 running 标记是否仍然有效（防止进程崩溃后永久卡住）。"""
+    if not state.get('running'):
+        return False
+    since = state.get('running_since')
+    if not since:
+        return True
+    try:
+        started = datetime.strptime(since, '%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return True
+    return (datetime.now() - started).total_seconds() < REFRESH_RUNNING_TTL_SECONDS
+
+
+def _divergence_refresh_needed(force: bool, state: dict) -> tuple:
+    """判断是否需要刷新（只读判断，不持锁、不执行）。"""
+    if force:
+        return True, 'force_refresh'
+    if _has_missing_divergence_assets():
+        return True, 'missing_files'
+    if state.get('last_success_bucket') == _current_4h_bucket() and not _refresh_running(state):
+        return False, 'same_bucket_skip'
+    return True, 'new_bucket_refresh'
+
+
+def refresh_divergence_assets(force: bool = False, wait_lock: bool = True) -> dict:
+    """刷新背离可视化产物。
+
+    成本控制：每个品种只取一次数（4H 与 1D 共用），指标按周期各算一次。
+    wait_lock=False 时拿不到锁立即返回 busy，后台刷新与手动刷新不会互相排队。
+    """
     result = {
         'success': True,
         'triggered': False,
         'reason': '',
-        'current_bucket': current_bucket,
-        'last_success_bucket': state.get('last_success_bucket'),
+        'status': 'idle',
+        'current_bucket': _current_4h_bucket(),
+        'last_success_bucket': None,
         'details': [],
-        'updated': False
+        'updated': False,
     }
 
-    with _divergence_refresh_lock:
+    if not _divergence_refresh_lock.acquire(blocking=wait_lock):
+        result['status'] = 'running'
+        result['reason'] = 'busy'
+        return result
+
+    try:
         state = _read_divergence_state()
         current_bucket = _current_4h_bucket()
-        missing_assets = _has_missing_divergence_assets()
-        last_success_bucket = state.get('last_success_bucket')
+        result['current_bucket'] = current_bucket
+        result['last_success_bucket'] = state.get('last_success_bucket')
 
-        if not force:
-            if missing_assets:
-                result['reason'] = 'missing_files'
-            elif last_success_bucket == current_bucket:
-                result['reason'] = 'same_bucket_skip'
-                result['last_success_bucket'] = last_success_bucket
-                result['updated'] = False
-                return result
-            else:
-                result['reason'] = 'new_bucket_refresh'
-        else:
-            result['reason'] = 'force_refresh'
+        needed, reason = _divergence_refresh_needed(force, state)
+        result['reason'] = reason
+        if not needed:
+            return result
 
-        from divergence_visualizer.divergence_detector import generate_detector_assets
+        # 先落 running 标记：并发请求与前端据此显示"后台更新中"
+        state.update({
+            'running': True,
+            'running_since': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        })
+        _write_divergence_state(state)
+
+        from divergence_visualizer.divergence_detector import ensure_symbol_data, render_symbol
 
         updated = False
         result['triggered'] = True
+        result['status'] = 'running'
         for symbol in DIVERGENCE_CONFIG['symbols']:
+            # 每个品种只取一次数，4H 与 1D 共用同一份本地数据
+            try:
+                ensure_symbol_data(
+                    symbol,
+                    required_days=90,
+                    base_timeframe=DIVERGENCE_CONFIG['base_timeframe'],
+                )
+            except Exception as e:
+                result['success'] = False
+                result['details'].append(
+                    {'symbol': symbol, 'timeframe': 'data', 'success': False, 'error': str(e)}
+                )
+                continue
+
             for timeframe in DIVERGENCE_CONFIG['timeframes']:
                 try:
-                    generate_detector_assets(
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        required_days=90,
+                    render_symbol(
+                        symbol,
+                        timeframe,
                         # 页面已改为前端 lightweight-charts 渲染，只产出 CSV
                         render_plots=False,
                         include_mobile=False,
@@ -227,10 +281,13 @@ def refresh_divergence_assets(force: bool = False) -> dict:
                     result['details'].append({'symbol': symbol, 'timeframe': timeframe, 'success': True})
                 except Exception as e:
                     result['success'] = False
-                    result['details'].append({'symbol': symbol, 'timeframe': timeframe, 'success': False, 'error': str(e)})
+                    result['details'].append(
+                        {'symbol': symbol, 'timeframe': timeframe, 'success': False, 'error': str(e)}
+                    )
 
         result['updated'] = updated
         state.update({
+            'running': False,
             'last_attempt_bucket': current_bucket,
             'last_attempt_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'last_result': 'success' if result['success'] else 'partial_or_failed'
@@ -241,12 +298,64 @@ def refresh_divergence_assets(force: bool = False) -> dict:
                 'last_success_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
         _write_divergence_state(state)
+        result['status'] = 'done'
         result['last_success_bucket'] = state.get('last_success_bucket')
         return result
+    finally:
+        _divergence_refresh_lock.release()
+
+
+def _start_background_refresh(force: bool = False) -> bool:
+    """启动后台刷新线程；已有线程在跑则返回 False。"""
+    global _divergence_background_thread
+    if _divergence_background_thread is not None and _divergence_background_thread.is_alive():
+        return False
+    _divergence_background_thread = threading.Thread(
+        target=_background_refresh_worker,
+        args=(force,),
+        name='divergence-refresh',
+        daemon=True,
+    )
+    _divergence_background_thread.start()
+    return True
+
+
+def _background_refresh_worker(force: bool) -> None:
+    # 让首屏请求先返回：后台的指标计算会长时间持有 GIL
+    time.sleep(BACKGROUND_REFRESH_DELAY_SECONDS)
+    try:
+        refresh_divergence_assets(force=force, wait_lock=False)
+    except Exception as e:
+        print(f"后台刷新背离数据失败: {e}")
 
 
 def ensure_divergence_fresh() -> dict:
-    return refresh_divergence_assets(force=False)
+    """请求路径只读：必要时触发后台刷新并立即返回，绝不阻塞首屏。"""
+    state = _read_divergence_state()
+    result = {
+        'status': 'idle',
+        'triggered': False,
+        'reason': '',
+        'updated': False,
+        'current_bucket': _current_4h_bucket(),
+        'last_success_bucket': state.get('last_success_bucket'),
+    }
+
+    needed, reason = _divergence_refresh_needed(False, state)
+    result['reason'] = reason
+    if not needed:
+        return result
+
+    if _refresh_running(state):
+        result['status'] = 'running'
+        return result
+
+    started = _start_background_refresh()
+    result['triggered'] = started
+    # 线程刚起还没写 running 标记时，也要告诉前端"正在更新"
+    if started or (_divergence_background_thread is not None and _divergence_background_thread.is_alive()):
+        result['status'] = 'running'
+    return result
 
 def get_stochrsi_data(symbol, timeframe):
     """获取指定币种和时间周期的StochRSI数据"""
@@ -1654,11 +1763,21 @@ def divergence_dxy():
 def divergence_refresh():
     """手动刷新Divergence数据（CSV + 周K缓存）"""
     try:
-        result = refresh_divergence_assets(force=True)
+        # 不排队等锁：后台已在刷新时直接告诉前端"正在刷新"
+        result = refresh_divergence_assets(force=True, wait_lock=False)
         _weekly_payload(force_dxy=True, force_btc=True)
+
+        if result.get('status') == 'running' and result.get('reason') == 'busy':
+            return jsonify({
+                'success': True,
+                'running': True,
+                'message': '后台正在刷新数据，请稍候',
+                'data': result
+            })
 
         return jsonify({
             'success': result['success'],
+            'running': result.get('status') == 'running',
             'message': 'Divergence刷新完成' if result['success'] else 'Divergence刷新部分失败',
             'data': result
         })

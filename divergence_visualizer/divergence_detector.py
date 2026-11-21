@@ -17,7 +17,7 @@ import mplfinance as mpf
 import os
 import sys
 import warnings
-from get_data import smart_get_data
+from get_data import save_csv_atomic, smart_get_data
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -102,7 +102,7 @@ def save_data(df, tbl_points, dbl_points, save_path):
     if 'turn' in df_save.columns:
         df_save = df_save.drop(columns=['turn'])
 
-    df_save.to_csv(save_path, index=False)
+    save_csv_atomic(df_save, save_path)
     print(f"已保存数据: {save_path}")
 
 
@@ -332,36 +332,30 @@ def process_symbol(symbol, timeframe, data_dir=None, show_interactive=False, lim
     return tbl_points, dbl_points
 
 
-def generate_detector_assets(symbol: str, timeframe: str, mobile_limit: int = 200, required_days: int = 90,
-                             render_plots: bool = True, include_mobile: bool = True,
-                             base_timeframe: str = "4H"):
-    """生成桌面版和移动版背离图。
+def ensure_symbol_data(symbol: str, required_days: int = 90, base_timeframe: str = "4H") -> None:
+    """只确保本地多周期数据最新，不做任何指标计算。
 
-    - 桌面图: detector_{COIN}_{TF}_overview.png
-    - 移动图: detector_{COIN}_{TF}_overview_mobile.png（最多 mobile_limit 根K线 ）
-
-    前端图表化后，网页刷新链可以传 render_plots=False / include_mobile=False，
-    此时只产出 detector_{COIN}_{TF}_signals.csv。
-
-    base_timeframe 默认 4H：页面最小只展示 4H，直接抓 4H 再聚合 1D/1W，
-    请求量是 15m 口径的 1/16，也不受 15m 数据缺口影响。
+    刷新链按品种调用一次即可：同品种的 4H 与 1D 共享同一份本地数据。
+    原来每个周期各跑一遍取数（3 品种 × 2 周期 = 6 次），其中一半是重复劳动。
     """
     symbol = symbol.upper()
-    timeframe = timeframe.lower()
-    symbol_swap = f"{symbol}-USDT-SWAP"
-
-    # 先确保本地多周期数据是最新，后续绘图直接复用本地csv
     smart_get_data(
-        symbol=symbol_swap,
-        timeframe=timeframe.upper(),
+        symbol=f"{symbol}-USDT-SWAP",
+        timeframe=base_timeframe.upper(),
         required_days=required_days,
         verbose=False,
         base_timeframe=base_timeframe,
     )
 
+
+def render_symbol(symbol: str, timeframe: str, mobile_limit: int = 200,
+                  render_plots: bool = True, include_mobile: bool = True,
+                  base_timeframe: str = "4H") -> None:
+    """基于本地 CSV 计算指标并产出 signals CSV（不取数、不联网）。"""
+    symbol = symbol.upper()
+    timeframe = timeframe.lower()
     data_dir = resolve_data_dir()
 
-    # 桌面版
     process_symbol(symbol, timeframe, data_dir=data_dir, show_interactive=False, limit_bars=None,
                    output_suffix='', render_plots=render_plots, base_timeframe=base_timeframe)
     # 移动版（限制K线数量）
@@ -369,6 +363,26 @@ def generate_detector_assets(symbol: str, timeframe: str, mobile_limit: int = 20
         process_symbol(symbol, timeframe, data_dir=data_dir, show_interactive=False,
                        limit_bars=mobile_limit, output_suffix='_mobile', render_plots=render_plots,
                        base_timeframe=base_timeframe)
+
+
+def generate_detector_assets(symbol: str, timeframe: str, mobile_limit: int = 200, required_days: int = 90,
+                             render_plots: bool = True, include_mobile: bool = True,
+                             base_timeframe: str = "4H"):
+    """生成单个品种 + 周期的背离产物（取数 + 指标）。
+
+    - 桌面版: detector_{COIN}_{TF}_signals.csv（render_plots=True 时额外出 PNG）
+    - 移动版: detector_{COIN}_{TF}_signals_mobile.csv
+
+    前端图表化后，网页刷新链可以传 render_plots=False / include_mobile=False，
+    此时只产出 signals CSV。刷新多个周期时改用 ensure_symbol_data + render_symbol，
+    避免同一品种重复取数。
+
+    base_timeframe 默认 4H：页面最小只展示 4H，直接抓 4H 再聚合 1D/1W，
+    请求量是 15m 口径的 1/16，也不受 15m 数据缺口影响。
+    """
+    ensure_symbol_data(symbol, required_days=required_days, base_timeframe=base_timeframe)
+    render_symbol(symbol, timeframe, mobile_limit=mobile_limit, render_plots=render_plots,
+                  include_mobile=include_mobile, base_timeframe=base_timeframe)
 
 
 def view_interactive(symbol='BTC', timeframe='4h', limit_bars=500, data_dir=None, base_timeframe='4H'):

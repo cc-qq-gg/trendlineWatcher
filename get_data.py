@@ -36,6 +36,43 @@ OHLCV_PAGE_SLEEP = 0.3
 NETWORK_RETRY_LIMIT = 3
 
 
+def save_csv_atomic(df: pd.DataFrame, path: str) -> None:
+    """先写临时文件再原子替换。
+
+    页面请求线程会并发读取这些 CSV，直接 to_csv 覆盖会让读方拿到半个文件。
+    """
+    tmp_path = f"{path}.tmp"
+    df.to_csv(tmp_path, index=False)
+    os.replace(tmp_path, path)
+
+
+def bucket_start(now: datetime, interval_seconds: int) -> datetime:
+    """按 interval 对齐的桶起点（naive，与本地 CSV 的北京时间口径一致）。"""
+    epoch = datetime(1970, 1, 1)
+    elapsed = int((now - epoch).total_seconds())
+    return epoch + timedelta(seconds=(elapsed // interval_seconds) * interval_seconds)
+
+
+def local_covers_current_bucket(last_time, base_timeframe, exchange=exchange) -> bool:
+    """本地最后一根是否已落在当前桶内。
+
+    落在当前桶内说明本周期内不会再有新 K，无需为"更新最新一根"发网络请求。
+    """
+    if last_time is None:
+        return False
+    try:
+        seconds = exchange.parse_timeframe(str(base_timeframe).lower())
+    except Exception:
+        return False
+    if not seconds:
+        return False
+    last = pd.to_datetime(last_time)
+    if getattr(last, "tzinfo", None) is not None:
+        last = last.tz_localize(None)
+    return last >= bucket_start(datetime.now(), seconds)
+
+
+
 def get_last_datetime(exchange, symbol, time_interval):
     file_path = (
         f"./data/{exchange.id}/csv/{symbol.replace('/','-')}_{time_interval}.csv"
@@ -588,7 +625,7 @@ def fill_missing_data_api(file_path, exchange=exchange, max_days_per_request=5):
             combined_df.reset_index(drop=True, inplace=True)
 
             # 保存合并后的数据到原始文件
-            combined_df.to_csv(file_path, index=False)
+            save_csv_atomic(combined_df, file_path)
             print(f"已将补全后的数据保存到原始文件: {file_path}")
 
             # 复检：分页若被交易所截断或窗口错位，必须显式报出来，
@@ -1299,20 +1336,29 @@ def smart_get_data(
                     if verbose:
                         print(f"  成功获取 {len(new_df)} 条 {base_timeframe} 数据")
             elif not fetch_info["need_fetch"]:
-                # 即使数据已最新，也获取最新 10 根 K 线更新
-                if verbose:
-                    print(f"  获取最新 10 根 K 线更新...")
-                latest_df = get_kline(
-                    exchange=exchange,
-                    symbol=symbol_api,
-                    time_interval=base_timeframe,
-                    limit=10,  # 直接获取最新 10 根
-                    base_timeframe=base_timeframe,
-                )
-                if latest_df is not None and not latest_df.empty:
-                    all_new_data.append(latest_df)
+                # 本地数据已覆盖当前桶 -> 本周期内不会再有新 K，跳过这次网络请求
+                if local_covers_current_bucket(
+                    local_info.get("time_range", (None, None))[1],
+                    base_timeframe,
+                    exchange,
+                ):
                     if verbose:
-                        print(f"  成功获取最新 {len(latest_df)} 条 {base_timeframe} 数据")
+                        print(f"  本地已覆盖当前 {base_timeframe} 桶，跳过联网更新")
+                else:
+                    # 跨桶了，取最新 10 根补齐
+                    if verbose:
+                        print(f"  获取最新 10 根 K 线更新...")
+                    latest_df = get_kline(
+                        exchange=exchange,
+                        symbol=symbol_api,
+                        time_interval=base_timeframe,
+                        limit=10,  # 直接获取最新 10 根
+                        base_timeframe=base_timeframe,
+                    )
+                    if latest_df is not None and not latest_df.empty:
+                        all_new_data.append(latest_df)
+                        if verbose:
+                            print(f"  成功获取最新 {len(latest_df)} 条 {base_timeframe} 数据")
 
             # 合并所有新获取的数据
             if all_new_data:
@@ -1378,7 +1424,7 @@ def smart_get_data(
                 csv_dir = os.path.join(data_dir, exchange.id, "csv")
                 os.makedirs(csv_dir, exist_ok=True)
                 save_path = os.path.join(csv_dir, f"{symbol_file}_{tf}.csv")
-                df_tf.to_csv(save_path, index=False)
+                save_csv_atomic(df_tf, save_path)
 
                 result["all_timeframes"][tf] = {
                     "df": df_tf,
@@ -1443,7 +1489,7 @@ def smart_get_data(
 
                     if df_tf is not None:
                         save_path = os.path.join(csv_dir, f"{symbol_file}_{tf}.csv")
-                        df_tf.to_csv(save_path, index=False)
+                        save_csv_atomic(df_tf, save_path)
                         result["all_timeframes"][tf] = {
                             "df": df_tf,
                             "rows": len(df_tf),

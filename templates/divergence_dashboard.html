@@ -586,20 +586,78 @@
         gridEl.querySelectorAll('[data-slot]').forEach((node) => state.observer.observe(node));
     }
 
-    async function loadOverview() {
-        setStatus('检查并加载中...');
+    let refreshPollTimer = null;
+    let refreshPollAttempts = 0;
+
+    function stopRefreshPolling() {
+        if (refreshPollTimer) {
+            clearInterval(refreshPollTimer);
+            refreshPollTimer = null;
+        }
+    }
+
+    function rerenderOverview(json) {
+        state.cards = json.data || [];
+        state.rendered = new Set();
+        renderDxy(json.dxy, json.btc_weekly);
+        renderCards(state.cards);
+        observeCards();
+    }
+
+    function scheduleRefreshPolling() {
+        if (refreshPollTimer) return;
+        refreshPollAttempts = 0;
+        // 后台刷新在跑：每 5 秒看一次状态，最多盯 2 分钟
+        refreshPollTimer = setInterval(async () => {
+            refreshPollAttempts += 1;
+            if (refreshPollAttempts > 24) {
+                stopRefreshPolling();
+                return;
+            }
+            try {
+                const json = await getJSON('/api/divergence/overview');
+                const refresh = json.refresh || {};
+                if (refresh.status === 'running') {
+                    setStatus('后台更新中，完成后自动刷新...');
+                    return;
+                }
+                stopRefreshPolling();
+                const bucket = refresh.last_success_bucket || '';
+                // 只有确实换了 4H 桶才重建图表，避免打断用户的缩放/悬停
+                if (bucket && bucket !== state.lastSuccessBucket) {
+                    state.lastSuccessBucket = bucket;
+                    rerenderOverview(json);
+                }
+                setStatus(`${refresh.updated ? '数据已更新 · ' : ''}${state.cards.length} 张图`);
+            } catch (err) {
+                console.error(err);
+            }
+        }, 5000);
+    }
+
+    async function loadOverview(options = {}) {
+        const silent = Boolean(options.silent);
+        if (!silent) setStatus('检查并加载中...');
         try {
             const json = await getJSON('/api/divergence/overview');
-            state.cards = json.data || [];
-            state.rendered = new Set();
-            renderDxy(json.dxy, json.btc_weekly);
-            renderCards(state.cards);
-            observeCards();
+            rerenderOverview(json);
 
-            const updated = json.refresh && json.refresh.updated;
+            const refresh = json.refresh || {};
+            if (refresh.last_success_bucket) {
+                state.lastSuccessBucket = refresh.last_success_bucket;
+            }
+
             const dxyCount = json.dxy && json.dxy.success ? json.dxy.bars.length : 0;
             const btcCount = json.btc_weekly && json.btc_weekly.success ? json.btc_weekly.bars.length : 0;
-            setStatus(`${updated ? '已触发更新 · ' : ''}${state.cards.length} 张图 · 周K DXY ${dxyCount} / BTC ${btcCount}`);
+            const suffix = `${state.cards.length} 张图 · 周K DXY ${dxyCount} / BTC ${btcCount}`;
+
+            if (refresh.status === 'running') {
+                // 首屏先用本地数据渲染，刷新在后台跑
+                setStatus(`后台更新中 · ${suffix}`);
+                scheduleRefreshPolling();
+            } else {
+                setStatus(`${refresh.updated ? '已触发更新 · ' : ''}${suffix}`);
+            }
         } catch (err) {
             console.error(err);
             setStatus('加载失败: ' + err.message);
@@ -615,8 +673,13 @@
             if (!json.success) {
                 throw new Error(json.message || '刷新失败');
             }
-            setStatus('刷新完成，正在重载图表...');
-            await loadOverview();
+            if (json.running) {
+                setStatus('后台刷新中，完成后自动更新...');
+                await loadOverview({ silent: true });
+            } else {
+                setStatus('刷新完成，正在重载图表...');
+                await loadOverview();
+            }
         } catch (err) {
             console.error(err);
             setStatus('刷新失败: ' + err.message);
@@ -626,7 +689,7 @@
     }
 
     refreshBtn.addEventListener('click', forceRefresh);
-    document.addEventListener('DOMContentLoaded', loadOverview);
+    document.addEventListener('DOMContentLoaded', () => loadOverview());
 </script>
 </body>
 </html>

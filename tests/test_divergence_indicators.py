@@ -237,3 +237,72 @@ def test_process_symbol_uses_daily_boll_width_threshold(tmp_path, monkeypatch):
     )
 
     assert calls == [6.0]
+
+
+def _ohlc_frame(rows, base_price, freq="4h"):
+    close = base_price + np.sin(np.arange(rows) / 3) * 2
+    return pd.DataFrame(
+        {
+            "candle_begin_time": pd.date_range("2026-01-01", periods=rows, freq=freq),
+            "open": close,
+            "high": close + 1,
+            "low": close - 1,
+            "close": close,
+            "volume": np.ones(rows),
+        }
+    )
+
+
+def test_process_symbol_reads_4h_source_and_ignores_15m(tmp_path, monkeypatch):
+    """页面最小周期是 4H，源文件必须是 _4H.csv；同时存在的 15m 文件不能干扰。"""
+    data_dir = tmp_path / "data"
+    output_dir = tmp_path / "output"
+    data_dir.mkdir()
+    output_dir.mkdir()
+
+    _ohlc_frame(120, base_price=200.0).to_csv(
+        data_dir / "BTC-USDT-SWAP_4H.csv", index=False
+    )
+    # 故意放一份价格完全不同、行数更多的 15m 文件
+    _ohlc_frame(480, base_price=50.0, freq="15min").to_csv(
+        data_dir / "BTC-USDT-SWAP_15m.csv", index=False
+    )
+    monkeypatch.setattr(detector, "OUTPUT_DIR", str(output_dir))
+
+    detector.process_symbol(
+        "BTC",
+        "4h",
+        data_dir=str(data_dir),
+        show_interactive=False,
+        limit_bars=None,
+        render_plots=False,
+    )
+
+    saved = pd.read_csv(output_dir / "detector_BTC_4H_signals.csv")
+    # 数据来自 4H 文件（200 附近），不是 15m 文件（50 附近）
+    assert saved["Close"].min() > 150
+    assert len(saved) == 120
+
+
+def test_process_symbol_returns_none_when_base_file_missing(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    output_dir = tmp_path / "output"
+    data_dir.mkdir()
+    output_dir.mkdir()
+    # 只给 15m 文件，没有 4H 源文件
+    _ohlc_frame(240, base_price=100.0, freq="15min").to_csv(
+        data_dir / "BTC-USDT-SWAP_15m.csv", index=False
+    )
+    monkeypatch.setattr(detector, "OUTPUT_DIR", str(output_dir))
+
+    result = detector.process_symbol(
+        "BTC",
+        "4h",
+        data_dir=str(data_dir),
+        show_interactive=False,
+        limit_bars=None,
+        render_plots=False,
+    )
+
+    assert result is None
+    assert not (output_dir / "detector_BTC_4H_signals.csv").exists()
