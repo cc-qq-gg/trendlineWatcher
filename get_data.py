@@ -19,6 +19,21 @@ pd.set_option("expand_frame_repr", False)  # 当列太多时不换行
 # =====设定参数
 exchange = ccxt.okx(OKEX_READONLY_CONFIG)
 # exchange = ccxt.binance(p)
+# OKX 的 currencies 走私有接口（/api/v5/asset/currencies），行情抓取不需要它，
+# 但 ccxt 每次 load_markets 都会先请求它：代理稍慢就超时，随后整条抓取链路失败。
+# 关掉后 load_markets 只拉公共 instruments，稳定性显著提升。
+exchange.has["fetchCurrencies"] = False
+
+# 单次分页请求根数。OKX 的 market/candles 与 market/history-candles 一次最多
+# 返回 300 根；一旦 limit 超过这个量级，交易所会忽略 before/after 窗口，
+# 直接返回"另一段"300 根（实测 limit=2000 时窗口错位到十几天之后），
+# 于是补缺口的分页循环拿到错误区间、缺口永远补不上且不报错。
+# 取 300 可让两个接口都严格按窗口返回。
+OHLCV_PAGE_LIMIT = 300
+# 分页间隔。OKX 公共行情接口限速约 40 次 / 2 秒，0.3 秒足够安全且比原来 2 秒快
+OHLCV_PAGE_SLEEP = 0.3
+# 网络错误重试上限：不设上限时一次断网会让抓取线程永久挂住
+NETWORK_RETRY_LIMIT = 3
 
 
 def get_last_datetime(exchange, symbol, time_interval):
@@ -113,7 +128,7 @@ def resample_kline(
     resampled = resampled.reset_index()
 
     print(
-        f"聚合完成: {len(df)} 条 15m 数据 -> {len(resampled)} 条 {target_timeframe} 数据"
+        f"聚合完成: {len(df)} 条基础周期数据 -> {len(resampled)} 条 {target_timeframe} 数据"
     )
 
     return resampled
@@ -126,6 +141,7 @@ def get_kline(
     time_interval="15m",
     days=1900,
     limit=None,
+    base_timeframe="15m",
 ):
     """
     获取K线数据
@@ -134,21 +150,25 @@ def get_kline(
         start_time: 开始时间
         exchange: 交易所
         symbol: 交易对
-        time_interval: 时间周期
+        time_interval: 目标时间周期
         days: 获取天数
         limit: 直接获取最新 N 根数据（不指定时间范围）
+        base_timeframe: 实际向交易所请求的基础周期。默认 15m 再聚合，
+            调用方若不需要细粒度可传 "4H"，请求量降到 1/16
 
-    注意: 始终从交易所获取 15m 数据，其他周期通过聚合计算得到
+    注意: base_timeframe 是唯一事实源，比它更粗的周期由聚合得到
     """
     # 记录原始请求的时间周期
     original_timeframe = time_interval
+    # ccxt 的 timeframe 键统一是小写（'4h' 而非 '4H'），传给交易所前先归一
+    base_tf_api = base_timeframe.lower()
 
     try:
         # 如果指定了 limit，直接获取最新 N 根数据
         if limit is not None:
-            print(f"请求最新 {limit} 根 K线 (周期: 15m)")
+            print(f"请求最新 {limit} 根 K线 (周期: {base_timeframe})")
             df = exchange.fetch_ohlcv(
-                symbol=symbol, timeframe="15m", limit=limit
+                symbol=symbol, timeframe=base_tf_api, limit=limit
             )
             if not df or len(df) == 0:
                 print(f"警告: 未获取到数据，symbol={symbol}")
@@ -169,18 +189,25 @@ def get_kline(
         end_time = pd.to_datetime(start_time) + timedelta(days=days)
         print("start_time", start_time)
         print("end_time", end_time)
-        print(f"请求周期: {original_timeframe} (实际获取: 15m)")
+        print(f"请求周期: {original_timeframe} (实际获取: {base_timeframe})")
 
         # =====开始循环抓取数据
-        # 始终获取 15m 数据
         df_list = []
         start_time_since = exchange.parse8601(start_time)
+        requested_since = start_time_since
+        interval_ms = exchange.parse_timeframe(base_tf_api) * 1000
+        prev_last_ms = None
+        network_retries = 0
 
         while True:
             try:
-                # 获取数据 - 始终使用 15m 周期
+                # 获取数据 - 周期由 base_timeframe 决定
+                # limit 必须 <= OHLCV_PAGE_LIMIT，超过会被交易所忽略 since 窗口
                 df = exchange.fetch_ohlcv(
-                    symbol=symbol, timeframe="15m", since=start_time_since, limit=2000
+                    symbol=symbol,
+                    timeframe=base_tf_api,
+                    since=start_time_since,
+                    limit=OHLCV_PAGE_LIMIT,
                 )
 
                 # 检查是否获取到数据
@@ -201,26 +228,52 @@ def get_kline(
                 )
                 # 保存时去掉时区信息，但保持北京时间
                 df["candle_begin_time"] = df["candle_begin_time"].dt.tz_localize(None)
-                print(df)
+                print(
+                    f"  本页 {len(df)} 根: "
+                    f"{df['candle_begin_time'].iloc[0]} ~ {df['candle_begin_time'].iloc[-1]}"
+                )
+
+                first_ms = int(df.iloc[0][0])
+                last_ms = int(df.iloc[-1][0])
+
+                # 防退化保护：交易所忽略 since 窗口时会返回另一段数据，
+                # 若不拦住，缺口会被"成功"地跳过且不报错。第一页允许 since
+                # 早于交易所可回溯范围（首根自然晚很多），第二页起必须衔接。
+                if prev_last_ms is not None and first_ms > requested_since + 2 * interval_ms:
+                    print(
+                        f"警告: 返回窗口未衔接（期望 {pd.to_datetime(requested_since, unit='ms')}，"
+                        f"实际首根 {pd.to_datetime(first_ms, unit='ms')}），"
+                        f"丢弃本页并停止分页"
+                    )
+                    break
+
+                # 没有前进说明已到最新一根，避免死循环
+                if prev_last_ms is not None and last_ms <= prev_last_ms:
+                    print("  数据未继续前进，已到最新一根，退出循环")
+                    break
+                prev_last_ms = last_ms
 
                 # 合并数据
                 df_list.append(df)
 
-                # 新的since
-                t = pd.to_datetime(df.iloc[-1][0], unit="ms")
-                print(t)
-                start_time_since = exchange.parse8601(str(t))
-
-                # 判断是否跳出循环
-                if t >= end_time or df.shape[0] <= 1:
+                # t 是 UTC naive，end_time 由北京时间字符串推导，比较前统一时区
+                t = pd.to_datetime(last_ms, unit="ms")
+                if t + timedelta(hours=8) >= end_time or df.shape[0] <= 1:
                     print("抓取完所需数据，或抓取至最新数据，完成抓取任务，退出循环")
                     break
 
-                # 抓取间隔需要暂停2s，防止抓取过于频繁
-                time.sleep(2)
+                # 下一批从本批最后一根的下一根开始，避免重复请求同一根
+                requested_since = last_ms + interval_ms
+                start_time_since = requested_since
+                time.sleep(OHLCV_PAGE_SLEEP)
 
             except ccxt.NetworkError as e:
-                print(f"网络错误: {str(e)}，等待10秒后重试...")
+                network_retries += 1
+                if network_retries >= NETWORK_RETRY_LIMIT:
+                    # 无限重试会让刷新线程永久挂住，已达到上限就用已获取的部分收尾
+                    print(f"网络错误连续 {network_retries} 次，停止本次抓取")
+                    break
+                print(f"网络错误: {str(e)}，等待10秒后重试({network_retries}/{NETWORK_RETRY_LIMIT})...")
                 time.sleep(10)  # 网络错误时等待更长时间
                 continue
 
@@ -276,9 +329,9 @@ def get_kline(
         df.sort_values("candle_begin_time", inplace=True)
         df.reset_index(drop=True, inplace=True)
 
-        # 如果请求的不是 15m 周期，进行聚合
-        if original_timeframe.lower() not in ["15m", "15min"]:
-            print(f"\n聚合数据: 15m -> {original_timeframe}")
+        # 目标周期比基础周期粗时做聚合（相等则无需处理）
+        if original_timeframe.lower() != base_timeframe.lower():
+            print(f"\n聚合数据: {base_timeframe} -> {original_timeframe}")
             df = resample_kline(df, original_timeframe)
 
         return df
@@ -450,6 +503,8 @@ def fill_missing_data_api(file_path, exchange=exchange, max_days_per_request=5):
                         symbol=symbol,
                         time_interval=time_interval,
                         days=(current_end - current_start).days + 1,
+                        # 直接按目标周期抓取，避免为了补 4H 又去翻 16 倍的 15m
+                        base_timeframe=time_interval,
                     )
 
                     # 检查是否获取到了数据
@@ -535,6 +590,22 @@ def fill_missing_data_api(file_path, exchange=exchange, max_days_per_request=5):
             # 保存合并后的数据到原始文件
             combined_df.to_csv(file_path, index=False)
             print(f"已将补全后的数据保存到原始文件: {file_path}")
+
+            # 复检：分页若被交易所截断或窗口错位，必须显式报出来，
+            # 否则"补全成功"与"缺口仍在"会同时成立而无人察觉
+            recheck = check_time_continuity(combined_df, time_interval)
+            if recheck["has_missing"]:
+                print(
+                    f"  警告: 补全后仍有 {recheck['missing_count']} 个缺口，"
+                    f"完整度 {recheck['completeness_rate']:.2%}"
+                )
+                for p in recheck["missing_periods"][:5]:
+                    print(
+                        f"    残余缺口 {p['start_time']} ~ {p['end_time']} "
+                        f"({p['missing_count']} 条)"
+                    )
+            else:
+                print("  复检通过: 已无缺口")
 
             return combined_df
         else:
@@ -991,6 +1062,7 @@ def smart_get_data(
     data_dir: str = "data",
     auto_fill_missing: bool = True,
     verbose: bool = True,
+    base_timeframe: str = "15m",
 ) -> dict:
     """
     智能获取K线数据
@@ -1005,6 +1077,9 @@ def smart_get_data(
         data_dir: 数据目录
         auto_fill_missing: 是否自动补全缺失数据
         verbose: 是否打印详细信息
+        base_timeframe: 基础周期（本地文件与交易所请求的最小粒度）。
+            默认 15m；只需要 4H 及更粗周期的调用方可传 '4H'，
+            请求量降到 1/16，且不再依赖 15m 数据的完整性
 
     返回:
         {
@@ -1025,8 +1100,14 @@ def smart_get_data(
         "all_timeframes": {},
     }
 
-    # 要生成的所有周期
+    # 要生成的所有周期：base_timeframe 本身 + 比它更粗的周期
     all_timeframes = ["15m", "4H", "1D", "1W"]
+    base_tf = base_timeframe.upper()
+    known = [tf.upper() for tf in all_timeframes]
+    if base_tf in known:
+        all_timeframes = all_timeframes[known.index(base_tf):]
+    else:
+        all_timeframes = [base_timeframe] + all_timeframes
 
     # 标准化symbol格式（用于API调用）
     # BTC-USDT-SWAP -> BTC/USDT:USDT (OKX swap 格式)
@@ -1044,13 +1125,13 @@ def smart_get_data(
         print(f"需要 {required_days} 天数据，生成周期: {', '.join(all_timeframes)}")
         print(f"{'='*60}")
 
-    # 1. 检查本地 15m 数据（基础数据）
-    local_info = get_local_data_info(symbol, "15m", data_dir, exchange.id)
+    # 1. 检查本地基础周期数据
+    local_info = get_local_data_info(symbol, base_timeframe, data_dir, exchange.id)
     result["local_info"] = local_info
 
     if verbose:
         if local_info["exists"]:
-            print(f"\n[本地 15m 数据]")
+            print(f"\n[本地 {base_timeframe} 数据]")
             print(f"  文件: {local_info['file_path']}")
             print(f"  行数: {local_info['row_count']}")
             print(
@@ -1060,7 +1141,7 @@ def smart_get_data(
             if local_info["has_missing"]:
                 print(f"  缺失: {local_info['missing_count']} 个点")
         else:
-            print(f"\n[本地 15m 数据] 不存在")
+            print(f"\n[本地 {base_timeframe} 数据] 不存在")
 
     # 2. 计算需要获取的数据
     now = datetime.now()
@@ -1136,7 +1217,7 @@ def smart_get_data(
     if verbose:
         print(f"\n[获取计划]")
         if fetch_info["need_fetch"]:
-            print(f"  需要获取: {fetch_info['fetch_days']} 天 15m 数据")
+            print(f"  需要获取: {fetch_info['fetch_days']} 天 {base_timeframe} 数据")
             print(
                 f"  时间范围: {fetch_info['fetch_start']} ~ {fetch_info['fetch_end']}"
             )
@@ -1150,13 +1231,13 @@ def smart_get_data(
         else:
             print(f"  本地数据已满足需求，将获取最新 10 根 K 线更新")
 
-    # 3. 获取 15m 数据
-    df_15m = None
+    # 3. 获取基础周期数据
+    df_base = None
 
     # 始终获取数据（更新最新K线或补充缺失）
     if True:
         if verbose:
-            print(f"\n[开始获取 15m 数据]...")
+            print(f"\n[开始获取 {base_timeframe} 数据]...")
 
         all_new_data = []
 
@@ -1192,8 +1273,9 @@ def smart_get_data(
                         start_time=str(gap_start_adjusted),
                         exchange=exchange,
                         symbol=symbol_api,
-                        time_interval="15m",
+                        time_interval=base_timeframe,
                         days=gap_days_adjusted,
+                        base_timeframe=base_timeframe,
                     )
 
                     if gap_df is not None and not gap_df.empty:
@@ -1207,14 +1289,15 @@ def smart_get_data(
                     start_time=str(fetch_info["fetch_start"]),
                     exchange=exchange,
                     symbol=symbol_api,
-                    time_interval="15m",  # 始终获取 15m
+                    time_interval=base_timeframe,
                     days=fetch_info["fetch_days"] + 1,
+                    base_timeframe=base_timeframe,
                 )
 
                 if new_df is not None and not new_df.empty:
                     all_new_data.append(new_df)
                     if verbose:
-                        print(f"  成功获取 {len(new_df)} 条 15m 数据")
+                        print(f"  成功获取 {len(new_df)} 条 {base_timeframe} 数据")
             elif not fetch_info["need_fetch"]:
                 # 即使数据已最新，也获取最新 10 根 K 线更新
                 if verbose:
@@ -1222,14 +1305,14 @@ def smart_get_data(
                 latest_df = get_kline(
                     exchange=exchange,
                     symbol=symbol_api,
-                    time_interval="15m",
+                    time_interval=base_timeframe,
                     limit=10,  # 直接获取最新 10 根
+                    base_timeframe=base_timeframe,
                 )
-                print(latest_df)
                 if latest_df is not None and not latest_df.empty:
                     all_new_data.append(latest_df)
                     if verbose:
-                        print(f"  成功获取最新 {len(latest_df)} 条 15m 数据")
+                        print(f"  成功获取最新 {len(latest_df)} 条 {base_timeframe} 数据")
 
             # 合并所有新获取的数据
             if all_new_data:
@@ -1246,49 +1329,49 @@ def smart_get_data(
                         time_col = "candle_begin_time"
                         if time_col in old_df.columns:
                             old_df[time_col] = pd.to_datetime(old_df[time_col])
-                            df_15m = pd.concat(
+                            df_base = pd.concat(
                                 [old_df, combined_new], ignore_index=True
                             )
-                            df_15m.drop_duplicates(
+                            df_base.drop_duplicates(
                                 subset=[time_col], keep="last", inplace=True
                             )
-                            df_15m.sort_values(time_col, inplace=True)
-                            df_15m.reset_index(drop=True, inplace=True)
+                            df_base.sort_values(time_col, inplace=True)
+                            df_base.reset_index(drop=True, inplace=True)
                             if verbose:
-                                print(f"  合并后总数据: {len(df_15m)} 条")
+                                print(f"  合并后总数据: {len(df_base)} 条")
                         else:
-                            df_15m = combined_new
+                            df_base = combined_new
                     except Exception as e:
                         if verbose:
                             print(f"  合并数据时出错: {str(e)}")
-                        df_15m = combined_new
+                        df_base = combined_new
                 else:
-                    df_15m = combined_new
+                    df_base = combined_new
             else:
                 if verbose:
                     print(f"  未获取到数据")
                 if local_info["exists"]:
-                    df_15m = pd.read_csv(local_info["file_path"])
+                    df_base = pd.read_csv(local_info["file_path"])
 
         except Exception as e:
             if verbose:
                 print(f"  获取数据出错: {str(e)}")
             if local_info["exists"]:
-                df_15m = pd.read_csv(local_info["file_path"])
+                df_base = pd.read_csv(local_info["file_path"])
     else:
         if local_info["exists"]:
-            df_15m = pd.read_csv(local_info["file_path"])
+            df_base = pd.read_csv(local_info["file_path"])
 
     # 4. 生成并保存所有周期的数据
-    if df_15m is not None and not df_15m.empty:
+    if df_base is not None and not df_base.empty:
         if verbose:
             print(f"\n[生成多周期数据]...")
 
         for tf in all_timeframes:
-            if tf == "15m":
-                df_tf = df_15m
+            if tf.upper() == base_tf:
+                df_tf = df_base
             else:
-                df_tf = resample_kline(df_15m, tf)
+                df_tf = resample_kline(df_base, tf)
 
             if df_tf is not None and not df_tf.empty:
                 # 保存数据到 data/{exchange.id}/csv/ 目录
@@ -1306,11 +1389,16 @@ def smart_get_data(
                 if verbose:
                     print(f"  {tf}: {len(df_tf)} 条 -> {save_path}")
 
-        # 设置主 df 为请求的周期
-        if timeframe in result["all_timeframes"]:
-            result["df"] = result["all_timeframes"][timeframe]["df"]
-        else:
-            result["df"] = df_15m
+        # 设置主 df 为请求的周期（忽略大小写）
+        requested_key = next(
+            (k for k in result["all_timeframes"] if k.upper() == timeframe.upper()),
+            None,
+        )
+        result["df"] = (
+            result["all_timeframes"][requested_key]["df"]
+            if requested_key
+            else df_base
+        )
 
     # 5. 验证数据
     if result["df"] is not None and not result["df"].empty:
@@ -1333,25 +1421,25 @@ def smart_get_data(
             if validation["errors"]:
                 print(f"  错误: {validation['errors']}")
 
-        # 自动补全 15m 缺失数据
+        # 自动补全基础周期缺失数据
         if (
             auto_fill_missing
-            and timeframe == "15m"
+            and timeframe.upper() == base_tf
             and validation["completeness"]["has_missing"]
         ):
             if verbose:
                 print(f"\n[自动补全缺失数据]...")
 
             csv_dir = os.path.join(data_dir, exchange.id, "csv")
-            save_path = os.path.join(csv_dir, f"{symbol_file}_15m.csv")
-            df_15m = fill_missing_data_api(save_path, exchange)
-            if df_15m is not None:
+            save_path = os.path.join(csv_dir, f"{symbol_file}_{base_timeframe}.csv")
+            df_base = fill_missing_data_api(save_path, exchange)
+            if df_base is not None:
                 # 重新生成所有周期
                 for tf in all_timeframes:
-                    if tf == "15m":
-                        df_tf = df_15m
+                    if tf.upper() == base_tf:
+                        df_tf = df_base
                     else:
-                        df_tf = resample_kline(df_15m, tf)
+                        df_tf = resample_kline(df_base, tf)
 
                     if df_tf is not None:
                         save_path = os.path.join(csv_dir, f"{symbol_file}_{tf}.csv")
@@ -1363,7 +1451,7 @@ def smart_get_data(
                         }
 
                 result["df"] = (
-                    result["all_timeframes"].get(timeframe, {}).get("df", df_15m)
+                    result["all_timeframes"].get(timeframe, {}).get("df", df_base)
                 )
                 result["validation"] = validate_data(result["df"], timeframe, symbol)
 
@@ -1389,11 +1477,12 @@ def batch_smart_get_data(
     exchange=exchange,
     data_dir: str = "data",
     verbose: bool = True,
+    base_timeframe: str = "15m",
 ) -> dict:
     """
     批量智能获取多个币种的数据
 
-    每个币种获取一次 15m 数据，自动生成 15m, 4H, 1D, 1W 四个周期
+    每个币种获取一次基础周期数据，自动生成该周期及更粗的所有周期
 
     返回:
         {
@@ -1419,6 +1508,7 @@ def batch_smart_get_data(
             exchange=exchange,
             data_dir=data_dir,
             verbose=verbose,
+            base_timeframe=base_timeframe,
         )
         results[key] = result
 
