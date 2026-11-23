@@ -19,10 +19,13 @@ from datetime import datetime
 
 import pandas as pd
 
+from alert_indicators import add_macd_indicators
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_DIR = os.path.join(PROJECT_ROOT, "data", "weekly")
 
 DEFAULT_INST_ID = "BTC-USDT-SWAP"
+# MACD 参数与背离规则全部复用 alert_indicators（12/26/9），这里不重复定义
 # OKX 单次最多返回 300 根；一次取满，接口再按 limit 截尾
 FETCH_LIMIT = 300
 OKX_CANDLES_URL = (
@@ -93,6 +96,34 @@ def fetch_okx_weekly(inst_id: str = DEFAULT_INST_ID, limit: int = FETCH_LIMIT) -
     return _normalize(pd.DataFrame(records))
 
 
+def _num(value):
+    """nan → None：浏览器 JSON.parse 不接受 NaN/Infinity。"""
+    return None if pd.isna(value) else round(float(value), 2)
+
+
+def _macd_block(frame: pd.DataFrame) -> pd.DataFrame:
+    """MACD + 顶底背离，直接复用 alert_indicators，与 K 线 CSV 同口径。
+
+    背离规则：按 MACD 柱符号切段，相邻同号段比较价格极值与柱极值
+    （价格创新高而柱更低 → 顶背离），也就是 CSV 里 macd_top_divergence
+    那一列的同源算法。
+
+    MACD 在完整缓存的收盘价上算，再按窗口截尾：只喂 200 根会让 talib
+    的 SMA 种子偏差落进可视区间开头，而缓存里有最多 300 根。
+    """
+    enriched = add_macd_indicators(frame)
+    return enriched[
+        [
+            "date",
+            "macd",
+            "macd_signal",
+            "macd_hist",
+            "macd_top_divergence",
+            "macd_bottom_divergence",
+        ]
+    ]
+
+
 def load_cache(inst_id: str = DEFAULT_INST_ID):
     path = cache_path(inst_id)
     if not os.path.exists(path):
@@ -132,6 +163,7 @@ def get_btc_weekly(limit: int = 200, force: bool = False, allow_network: bool = 
         "interval": "1W",
         "source": "",
         "bars": [],
+        "macd": {"dif": [], "dea": [], "hist": [], "top_div": [], "bottom_div": []},
         "partial_last": False,
         "stale": False,
         "fetched_at": "",
@@ -167,20 +199,39 @@ def get_btc_weekly(limit: int = 200, force: bool = False, allow_network: bool = 
     last_date = windowed["date"].iloc[-1]
     last_confirm = str(windowed["confirm"].iloc[-1]) if "confirm" in windowed.columns else "1"
 
+    bars = [
+        {
+            "t": _to_unix(row.date),
+            "o": round(float(row.open), 2),
+            "h": round(float(row.high), 2),
+            "l": round(float(row.low), 2),
+            "c": round(float(row.close), 2),
+        }
+        for row in windowed.itertuples(index=False)
+    ]
+    # 与 bars 同长同序，前端直接复用 bars 的时间轴
+    macd = _macd_block(frame).tail(limit)
+
     result.update(
         {
             "success": True,
             "source": cached_source or "cache",
-            "bars": [
-                {
-                    "t": _to_unix(row.date),
-                    "o": round(float(row.open), 2),
-                    "h": round(float(row.high), 2),
-                    "l": round(float(row.low), 2),
-                    "c": round(float(row.close), 2),
-                }
-                for row in windowed.itertuples(index=False)
-            ],
+            "bars": bars,
+            "macd": {
+                "dif": [_num(v) for v in macd["macd"]],
+                "dea": [_num(v) for v in macd["macd_signal"]],
+                "hist": [_num(v) for v in macd["macd_hist"]],
+                "top_div": [
+                    _to_unix(day)
+                    for day, flag in zip(macd["date"], macd["macd_top_divergence"])
+                    if flag == 1
+                ],
+                "bottom_div": [
+                    _to_unix(day)
+                    for day, flag in zip(macd["date"], macd["macd_bottom_divergence"])
+                    if flag == 1
+                ],
+            },
             # confirm='0' 或 末根日期落在本周内，都算进行中的周
             "partial_last": last_confirm == "0"
             or (pd.Timestamp(now.date()) - last_date).days < 7,

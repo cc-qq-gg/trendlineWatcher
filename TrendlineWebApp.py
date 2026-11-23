@@ -174,11 +174,41 @@ def _align_weekly_anchor(inst_id: str, force: bool = False) -> dict:
     return data
 
 
-def _weekly_payload(force_dxy: bool = False, force_btc: bool = False) -> dict:
-    """顶部对比图数据：美元指数与 BTC 各取最新 weekly_bars 根周K，锚点统一到周一。"""
+def _ahr999_series(force: bool = False) -> dict:
+    """AHR999 周序列。
+
+    默认只读缓存：重建需要把 5m 全表聚合成日线（约 2.7 秒），绝不能落在请求路径上。
+    force=True 才允许同步重算（手动刷新按钮走这条路）。
+    """
+    from divergence_visualizer import ahr999 as ahr_provider
+
+    return ahr_provider.get_weekly_series(
+        limit=DIVERGENCE_CONFIG['weekly_bars'],
+        force=force,
+        allow_rebuild=force,
+    )
+
+
+def _warm_ahr999_cache() -> None:
+    """AHR999 缓存缺失或过期时起后台线程重建，立即返回，不阻塞首屏。"""
+    try:
+        from divergence_visualizer import ahr999 as ahr_provider
+
+        ahr_provider.warm_cache_in_background()
+    except Exception as e:
+        print(f"触发 AHR999 后台生成失败: {e}")
+
+
+def _weekly_payload(force_dxy: bool = False, force_btc: bool = False,
+                    force_ahr999: bool = False) -> dict:
+    """顶部对比图数据：美元指数与 BTC 各取最新 weekly_bars 根周K，锚点统一到周一。
+
+    AHR999 由本地 BTC 日线算出后按周聚合，锚点同样是周一，可与上面两条周K对齐。
+    """
     return {
         'dxy': _align_weekly_anchor('DXY', force=force_dxy),
         'btc_weekly': _align_weekly_anchor('BTC', force=force_btc),
+        'ahr999': _ahr999_series(force=force_ahr999),
     }
 
 
@@ -1719,12 +1749,14 @@ def divergence_overview():
         ]
 
         weekly = _weekly_payload()
+        _warm_ahr999_cache()
 
         return jsonify({
             'success': True,
             'data': cards,
             'dxy': weekly['dxy'],
             'btc_weekly': weekly['btc_weekly'],
+            'ahr999': weekly['ahr999'],
             'refresh': refresh_info
         })
     except Exception as e:
@@ -1748,13 +1780,19 @@ def divergence_chart(symbol, timeframe):
 @app.route('/api/divergence/dxy', methods=['GET'])
 @require_auth
 def divergence_dxy():
-    """周K对比图：美元指数 + BTC，各取最新 200 根"""
+    """周K对比图：美元指数 + BTC + AHR999，各取最新 200 根"""
     force = request.args.get('force') == '1'
-    weekly = _weekly_payload(force_dxy=force, force_btc=force)
+    force_ahr = force or request.args.get('force_ahr999') == '1'
+    weekly = _weekly_payload(force_dxy=force, force_btc=force, force_ahr999=force_ahr)
     return jsonify({
-        'success': bool(weekly['dxy'].get('success') or weekly['btc_weekly'].get('success')),
+        'success': bool(
+            weekly['dxy'].get('success')
+            or weekly['btc_weekly'].get('success')
+            or weekly['ahr999'].get('success')
+        ),
         'dxy': weekly['dxy'],
         'btc_weekly': weekly['btc_weekly'],
+        'ahr999': weekly['ahr999'],
     })
 
 
@@ -1765,7 +1803,7 @@ def divergence_refresh():
     try:
         # 不排队等锁：后台已在刷新时直接告诉前端"正在刷新"
         result = refresh_divergence_assets(force=True, wait_lock=False)
-        _weekly_payload(force_dxy=True, force_btc=True)
+        _weekly_payload(force_dxy=True, force_btc=True, force_ahr999=True)
 
         if result.get('status') == 'running' and result.get('reason') == 'busy':
             return jsonify({

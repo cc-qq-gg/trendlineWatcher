@@ -126,7 +126,8 @@
             position: relative;
         }
         .chart { width: 100%; height: 340px; }
-        .chart.dxy { height: 300px; }
+        /* 主图:DXY/BTC 周K = 3 : 副图(AHR999 左轴 + MACD 右轴) = 1.5 */
+        .chart.dxy { height: 480px; }
         .chart-error {
             height: 340px;
             display: flex;
@@ -152,7 +153,7 @@
             .title { font-size: 18px; }
             .grid { grid-template-columns: 1fr; gap: 10px; }
             .chart { height: 300px; }
-            .chart.dxy { height: 220px; }
+            .chart.dxy { height: 440px; }
             .status { max-width: 100%; }
         }
     </style>
@@ -169,11 +170,11 @@
     </div>
 
     <div class="section-title">
-        美元指数周K + BTC 周K（各取最新 200 根）<span class="tag" id="dxyTag">加载中</span>
+        美元指数周K + BTC 周K（各取最新 200 根）+ AHR999 / BTC MACD 副图（含顶底背离）<span class="tag" id="dxyTag">加载中</span>
     </div>
     <div class="card dxy">
         <div class="card-header">
-            <div class="pair">DXY 美元指数（右轴） · BTC（左轴） · 周K</div>
+            <div class="pair">DXY 美元指数（右轴） · BTC（左轴） · 周K · 副图 AHR999（左轴）+ BTC MACD（右轴）</div>
             <div class="updated" id="dxyMeta">—</div>
         </div>
         <div class="chart-wrap">
@@ -204,10 +205,10 @@
         boll_break_down: { color: '#f97316', apexUp: false, above: false },
     };
 
-    function drawArrow(ctx, X, Y, hr, vr, style) {
-        const half = 3.4 * hr;
-        const gap = 3 * vr;
-        const height = 6 * vr;
+    function drawArrow(ctx, X, Y, hr, vr, style, scale = 1) {
+        const half = 3.4 * hr * scale;
+        const gap = 3 * vr * scale;
+        const height = 6 * vr * scale;
         const inner = style.above ? Y - gap : Y + gap;
         const outer = style.above ? Y - gap - height : Y + gap + height;
         const apex = (style.apexUp === style.above) ? outer : inner;
@@ -219,9 +220,14 @@
         ctx.closePath();
         ctx.fillStyle = style.color;
         ctx.fill();
+        // 白色描边：不加的话小尺寸三角在密集线条上几乎看不见
+        ctx.strokeStyle = 'rgba(255,255,255,.9)';
+        ctx.lineWidth = Math.max(1, hr);
+        ctx.stroke();
     }
 
-    function createSignalPrimitive(chart, series, signals) {
+    function createSignalPrimitive(chart, series, signals, options) {
+        const scale = (options && options.scale) || 1;
         return {
             attached() {},
             detached() {},
@@ -263,7 +269,7 @@
                                         ctx.textBaseline = 'middle';
                                         ctx.fillText(style.text, X, Y + 0.5 * vr);
                                     } else {
-                                        drawArrow(ctx, X, Y, hr, vr, style);
+                                        drawArrow(ctx, X, Y, hr, vr, style, scale);
                                     }
                                 });
                             });
@@ -329,6 +335,35 @@
         return out;
     }
 
+    // MACD 副图：柱 + DIF/DEA。币种卡片与 DXY 卡片共用同一套绘制逻辑，
+    // 参数都是 (12,26,9)，口径来自后端 alert_indicators。
+    // DXY 卡片会和 AHR999 同 pane，所以允许覆盖线色以避开蓝/橙参考线的撞色。
+    function addMacdPane(chart, paneIndex, times, block, style) {
+        const look = Object.assign({ dif: '#3b82f6', dea: '#f59e0b' }, style || {});
+        const hist = chart.addSeries(LWC.HistogramSeries, {
+            priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+            priceLineVisible: false,
+            lastValueVisible: false,
+        }, paneIndex);
+        hist.setData(toLine(times, block.hist).map((p) => ({
+            time: p.time,
+            value: p.value,
+            color: p.value >= 0 ? 'rgba(239,83,80,.55)' : 'rgba(38,166,154,.55)',
+        })));
+
+        const dif = chart.addSeries(LWC.LineSeries, {
+            color: look.dif, lineWidth: 1, priceLineVisible: false, title: 'DIF',
+        }, paneIndex);
+        dif.setData(toLine(times, block.dif));
+
+        const dea = chart.addSeries(LWC.LineSeries, {
+            color: look.dea, lineWidth: 1, priceLineVisible: false, title: 'DEA',
+        }, paneIndex);
+        dea.setData(toLine(times, block.dea));
+
+        return { hist, dif, dea };
+    }
+
     function buildCardChart(box, payload) {
         const chart = LWC.createChart(box, chartOptions());
 
@@ -348,30 +383,17 @@
         })));
 
         // 旧 PNG 主图没有布林带，这里也不画；BOLL 只以 W 信号点体现
-        // 副图：MACD 柱 + DIF/DEA
-        const macdHist = chart.addSeries(LWC.HistogramSeries, {
-            priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-            priceLineVisible: false,
-            lastValueVisible: false,
-        }, 1);
-        macdHist.setData(toLine(payload.bars.t, payload.ind.macd_hist).map((p) => ({
-            time: p.time,
-            value: p.value,
-            color: p.value >= 0 ? 'rgba(239,83,80,.55)' : 'rgba(38,166,154,.55)',
-        })));
-        const dif = chart.addSeries(LWC.LineSeries, {
-            color: '#3b82f6', lineWidth: 1, priceLineVisible: false, title: 'DIF',
-        }, 1);
-        dif.setData(toLine(payload.bars.t, payload.ind.macd));
-        const dea = chart.addSeries(LWC.LineSeries, {
-            color: '#f59e0b', lineWidth: 1, priceLineVisible: false, title: 'DEA',
-        }, 1);
-        dea.setData(toLine(payload.bars.t, payload.ind.macd_signal));
+        // 副图：MACD 柱 + DIF/DEA（与 DXY 卡片共用 addMacdPane）
+        addMacdPane(chart, 1, payload.bars.t, {
+            dif: payload.ind.macd,
+            dea: payload.ind.macd_signal,
+            hist: payload.ind.macd_hist,
+        });
 
         const panes = chart.panes();
         if (panes.length > 1) {
             panes[0].setStretchFactor(3);
-            panes[1].setStretchFactor(1);
+            panes.slice(1).forEach((pane) => pane.setStretchFactor(1));
         }
 
         // 标记自绘：库自带 marker 最小 12px，改不小；副图不再重复标注
@@ -385,7 +407,26 @@
         return chart;
     }
 
-    function buildDxyChart(box, dxy, btc) {
+    // 后端按 MACD 柱符号切段、比较相邻同号段的价格极值与柱极值来判定背离，
+    // 只回传时间点；这里把时间映射回该周的 MACD 柱值，箭头就锚在柱的峰谷外侧。
+    function buildDivergenceSignals(btc) {
+        const macd = btc && btc.macd;
+        if (!macd || !macd.dif) return [];
+        const histByTime = new Map();
+        btc.bars.forEach((bar, i) => {
+            const value = macd.hist[i];
+            if (value !== null && value !== undefined) histByTime.set(bar.t, value);
+        });
+        const make = (times, kind) => (times || [])
+            .filter((t) => histByTime.has(t))
+            .map((t) => ({ kind, t, price: histByTime.get(t) }));
+        return [
+            ...make(macd.top_div, 'macd_top'),
+            ...make(macd.bottom_div, 'macd_bottom'),
+        ];
+    }
+
+    function buildDxyChart(box, dxy, btc, ahr) {
         const chart = LWC.createChart(box, chartOptions({
             leftPriceScale: { visible: true, borderColor: '#e5e7eb' },
             timeScale: {
@@ -426,6 +467,65 @@
             })));
         }
 
+        // AHR999 + BTC MACD → 同一个副图（pane 1）：时间轴与 crosshair 天然联动。
+        // 两者量纲差 1000 倍（AHR999 约 0.25~5，MACD 约 ±2000），共用一根轴会把
+        // AHR999 压成贴地直线，所以 AHR999 走左轴、MACD 走右轴。
+        const hasAhr = Boolean(ahr && ahr.success && ahr.bars.length);
+        if (hasAhr) {
+            const ahrSeries = chart.addSeries(LWC.LineSeries, {
+                color: '#2563eb', lineWidth: 2,
+                priceScaleId: 'left',
+                priceLineVisible: false, lastValueVisible: true,
+                priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+            }, 1);
+            ahrSeries.setData(ahr.bars.map((b) => ({ time: b.t, value: b.v })));
+
+            // 原文分区：低于 0.45 抄底，0.45~1.2 定投，1.2~5 起飞，>5 高估。
+            // 参考线若远超当前曲线范围会把副图压扁（如 200 周窗口内最高只有 1.83），
+            // 因此只画落在可视区间的阈值，其余写在图例里。
+            const values = ahr.bars.map((b) => b.v);
+            const vMin = Math.min(...values);
+            const vMax = Math.max(...values);
+            const zoneLines = [
+                { price: ahr.thresholds.bottom, title: '0.45 抄底', color: '#16a34a' },
+                { price: ahr.thresholds.dca, title: '1.2 定投上沿', color: '#d97706' },
+                { price: ahr.thresholds.takeoff, title: '5 高估', color: '#dc2626' },
+            ].filter((line) => line.price >= vMin * 0.5 && line.price <= vMax * 1.5);
+            zoneLines.forEach((line) => {
+                ahrSeries.createPriceLine({
+                    price: line.price,
+                    color: line.color,
+                    lineWidth: 1,
+                    lineStyle: LWC.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: line.title,
+                });
+            });
+        }
+
+        // BTC MACD → 同一个副图，走右轴；顶底背离按后端给出的时间点标在柱的峰谷外侧
+        if (btc && btc.success && btc.macd && btc.macd.dif.length) {
+            const macdSeries = addMacdPane(chart, 1, btc.bars.map((b) => b.t), btc.macd, {
+                // AHR999 已是深蓝、参考线占了绿/橙，DIF/DEA 换青/紫避开撞色；
+                // 紫色与背离三角同色系，语义上"紫色 = MACD 信号"
+                dif: '#06b6d4',
+                dea: '#7c3aed',
+            });
+            const divSignals = buildDivergenceSignals(btc);
+            if (divSignals.length) {
+                macdSeries.dif.attachPrimitive(
+                    createSignalPrimitive(chart, macdSeries.dif, divSignals, { scale: 1.7 }),
+                );
+            }
+        }
+
+        const panes = chart.panes();
+        if (panes.length > 1) {
+            // 副图里塞了两套内容（AHR999 曲线 + MACD 柱线），给的比例比单指标大一点
+            panes[0].setStretchFactor(3);
+            panes.slice(1).forEach((pane) => pane.setStretchFactor(1.5));
+        }
+
         chart.timeScale().fitContent();
         return chart;
     }
@@ -458,7 +558,50 @@
         return `${label}（${axisLabel}）${parts.join(' · ')}`;
     }
 
-    function renderDxy(dxy, btc) {
+    function ahrNote(ahr) {
+        if (!ahr || !ahr.success || !ahr.bars.length) {
+            const why = (ahr && ahr.message) || '数据暂不可用';
+            return `AHR999（副图·左轴）不可用：${why}`;
+        }
+        const fmt = (t) => new Date(t * 1000).toISOString().slice(0, 10);
+        const latest = ahr.latest || {};
+        const parts = [
+            `${fmt(ahr.bars[0].t)} → ${fmt(ahr.bars[ahr.bars.length - 1].t)}`,
+            `${ahr.count} 周`,
+            `当前 ${Number(latest.v).toFixed(3)}（${latest.zone}）`,
+            '分区 0.45 / 1.2 / 5',
+            `200日定投成本 ${Math.round(latest.dca200)}`,
+            `指数增长估值 ${Math.round(latest.valuation)}`,
+            ahr.partial_last ? '末根进行中' : '末根已收',
+            ahr.stale ? '缓存已过期' : '',
+            '现货收盘口径',
+        ].filter(Boolean);
+        return `AHR999（副图·左轴）${parts.join(' · ')}`;
+    }
+
+    function macdNote(btc) {
+        const macd = btc && btc.macd;
+        if (!btc || !btc.success || !macd || !macd.dif.length) {
+            return 'BTC MACD（副图）不可用：缺少周K数据';
+        }
+        const tail = (arr) => {
+            const valid = arr.filter((v) => v !== null && v !== undefined);
+            return valid.length ? valid[valid.length - 1] : null;
+        };
+        const dif = tail(macd.dif);
+        const hist = tail(macd.hist);
+        const parts = [
+            '12,26,9',
+            `${macd.dif.length} 周`,
+            dif === null ? 'DIF —' : `DIF ${dif.toFixed(2)}`,
+            hist === null ? 'MACD —' : `MACD ${hist.toFixed(2)}`,
+            `顶背离 ${(macd.top_div || []).length} 次 / 底背离 ${(macd.bottom_div || []).length} 次`,
+            '口径同 K 线 CSV（talib）',
+        ];
+        return `BTC MACD（副图·右轴）${parts.join(' · ')}`;
+    }
+
+    function renderDxy(dxy, btc, ahr) {
         const box = el('dxyChart');
         const tag = el('dxyTag');
         const okDxy = !!(dxy && dxy.success);
@@ -480,19 +623,22 @@
 
         const dxyCount = okDxy ? dxy.bars.length : 0;
         const btcCount = okBtc ? btc.bars.length : 0;
+        const ahrCount = (ahr && ahr.success) ? ahr.bars.length : 0;
         const fetched = (okDxy && dxy.fetched_at) || (okBtc && btc.fetched_at) || '—';
         const from = (okBtc && btc.window && btc.window.from) || (okDxy && dxy.window && dxy.window.from) || '—';
         const to = (okBtc && btc.window && btc.window.to) || (okDxy && dxy.window && dxy.window.to) || '—';
         el('dxyMeta').textContent =
-            `${from} → ${to} · DXY ${dxyCount} 周 / BTC ${btcCount} 周 · 缓存 ${fetched}`;
+            `${from} → ${to} · DXY ${dxyCount} 周 / BTC ${btcCount} 周 / AHR999 ${ahrCount} 周 · 缓存 ${fetched}`;
 
         el('dxyLegend').textContent = [
             weeklyNote('DXY 美元指数', dxy, '右轴'),
             weeklyNote('BTC', btc, '左轴'),
-            '周锚点统一为周一（DXY 原按周日收盘，已前移 6 天）',
+            ahrNote(ahr),
+            macdNote(btc),
+            '周锚点统一为周一（DXY 原按周日收盘，已前移 6 天；AHR999 取该周最后一日；MACD 挂 BTC 周K）',
         ].join('\n');
 
-        buildDxyChart(box, dxy, btc);
+        buildDxyChart(box, dxy, btc, ahr);
     }
 
     function countsHtml(counts) {
@@ -599,7 +745,7 @@
     function rerenderOverview(json) {
         state.cards = json.data || [];
         state.rendered = new Set();
-        renderDxy(json.dxy, json.btc_weekly);
+        renderDxy(json.dxy, json.btc_weekly, json.ahr999);
         renderCards(state.cards);
         observeCards();
     }

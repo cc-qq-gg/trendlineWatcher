@@ -1,13 +1,17 @@
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
+import talib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import TrendlineWebApp as webapp
+from divergence_visualizer import ahr999 as ahr_module
 from divergence_visualizer import dxy as dxy_module
 from divergence_visualizer import payload as payload_module
 from divergence_visualizer import weekly as weekly_module
@@ -209,8 +213,20 @@ def weekly_bars(days, close=100.0):
     ]
 
 
-def test_weekly_payload_aligns_both_sides_to_monday(monkeypatch):
-    """DXY 按周日标注、BTC 按周一开始，叠加前必须统一到同一周的周一。"""
+def ahr_payload(days, values, latest=None):
+    return {
+        "success": True,
+        "source": "cache",
+        "count": len(days),
+        "bars": [{"t": unix(day), "v": value} for day, value in zip(days, values)],
+        "thresholds": {"bottom": 0.45, "dca": 1.2, "takeoff": 5.0},
+        "partial_last": True,
+        "latest": latest or {"v": values[-1], "zone": "抄底区"},
+    }
+
+
+def test_weekly_payload_aligns_all_three_sides_to_monday(monkeypatch):
+    """DXY 按周日标注、BTC 按周一开始；AHR999 也必须落在同一周的周一。"""
     monkeypatch.setattr(
         dxy_module, "get_weekly_bars",
         lambda **kwargs: {
@@ -225,15 +241,53 @@ def test_weekly_payload_aligns_both_sides_to_monday(monkeypatch):
             "bars": weekly_bars(["2026-11-02", "2026-11-09"]), "partial_last": True,
         },
     )
+    monkeypatch.setattr(
+        ahr_module, "get_weekly_series",
+        lambda **kwargs: ahr_payload(["2026-11-02", "2026-11-09"], [0.31, 0.29]),
+    )
 
     payload = webapp._weekly_payload()
 
-    for key in ("dxy", "btc_weekly"):
+    for key in ("dxy", "btc_weekly", "ahr999"):
         days = [datetime.fromtimestamp(b["t"], timezone.utc) for b in payload[key]["bars"]]
         assert all(day.weekday() == 0 for day in days)
     # 周日的 DXY 11-08 前移后落在 11-02，与 BTC 的 11-02 完全重合
     assert payload["dxy"]["bars"][-1]["t"] == payload["btc_weekly"]["bars"][0]["t"]
     assert payload["dxy"]["window"] == {"from": "2026-10-26", "to": "2026-11-02"}
+    assert payload["ahr999"]["bars"][0]["t"] == payload["btc_weekly"]["bars"][0]["t"]
+
+
+def test_ahr999_series_never_rebuilds_on_request_path(monkeypatch):
+    """5m 全表聚合约 2.7 秒，请求路径只能读缓存；force 才允许同步重算。"""
+    seen = {}
+
+    def fake_get_weekly_series(**kwargs):
+        seen.update(kwargs)
+        return ahr_payload(["2026-11-02"], [0.3])
+
+    monkeypatch.setattr(ahr_module, "get_weekly_series", fake_get_weekly_series)
+
+    webapp._ahr999_series()
+    assert seen["allow_rebuild"] is False
+    assert seen["force"] is False
+
+    webapp._ahr999_series(force=True)
+    assert seen["allow_rebuild"] is True
+    assert seen["force"] is True
+
+
+def test_ahr999_warm_cache_is_fire_and_forget(monkeypatch):
+    calls = []
+
+    def boom():
+        calls.append(1)
+        raise RuntimeError("磁盘不可写")
+
+    monkeypatch.setattr(ahr_module, "warm_cache_in_background", boom)
+
+    # 后台触发失败只打日志，绝不能让 overview 请求 500
+    webapp._warm_ahr999_cache()
+    assert calls == [1]
 
 
 def test_weekly_bars_returns_tail_limit(tmp_path, monkeypatch):
@@ -272,3 +326,65 @@ def test_weekly_uses_cache_when_network_fails(tmp_path, monkeypatch):
     assert result["source"] == "okx"
     assert result["stale"] is True
     assert len(result["bars"]) == 2
+
+
+def test_btc_weekly_attaches_macd_aligned_with_bars(tmp_path, monkeypatch):
+    """MACD 必须先在完整缓存上算再按 limit 截尾，只喂窗口会让 EMA 种子偏差进画面。"""
+    monkeypatch.setattr(weekly_module, "CACHE_DIR", str(tmp_path))
+    days = pd.date_range("2024-01-01", periods=60, freq="7D")
+    # 必须有噪声：线性行情下 EMA 会快速收敛，窗口差异被抹平，测不出种子效应
+    close = 30000 + np.cumsum(np.random.default_rng(7).normal(0, 800, 60))
+    weekly_module.save_cache(
+        pd.DataFrame({
+            "date": days,
+            "open": close - 100, "high": close + 500, "low": close - 500, "close": close,
+        }),
+        "okx",
+        datetime.now(),
+    )
+
+    result = weekly_module.get_btc_weekly(limit=40, allow_network=False)
+
+    macd = result["macd"]
+    assert len(result["bars"]) == 40
+    assert len(macd["dif"]) == len(macd["dea"]) == len(macd["hist"]) == 40
+
+    dif, _dea, hist = talib.MACD(close, 12, 26, 9)
+    assert macd["dif"][-1] == pytest.approx(round(float(dif[-1]), 2))
+    assert macd["hist"][-1] == pytest.approx(round(float(hist[-1]), 2))
+
+    only_window, _, _ = talib.MACD(close[-40:], 12, 26, 9)
+    assert abs(float(only_window[-1]) - float(dif[-1])) > 1e-6, "被截断的窗口不该给出同一个值"
+
+    # 背离点复用 alert_indicators 的柱分段口径，只回传时间戳，必须落在 bars 内
+    bar_times = {b["t"] for b in result["bars"]}
+    assert isinstance(macd["top_div"], list)
+    assert isinstance(macd["bottom_div"], list)
+    assert set(macd["top_div"]) <= bar_times
+    assert set(macd["bottom_div"]) <= bar_times
+    # inf/nan 会让浏览器 JSON.parse 直接失败
+    json.dumps(macd, allow_nan=False)
+
+
+def test_ahr999_payload_passes_flask_strict_json(tmp_path, monkeypatch):
+    """浏览器 JSON.parse 不接受 Infinity/NaN，payload 必须能被严格序列化。"""
+    monkeypatch.setattr(ahr_module, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(ahr_module, "CACHE_PATH", str(tmp_path / "ahr999_weekly.csv"))
+    ahr_module.save_cache(
+        pd.DataFrame({
+            "date": pd.to_datetime(["2026-11-02", "2026-11-09"]),
+            "price": [60000.0, 61000.0],
+            "dca200": [70000.0, 70500.0],
+            "valuation": [180000.0, 181000.0],
+            "ahr999": [0.28, 6.1],
+        }),
+        datetime.now(),
+    )
+
+    payload = webapp._ahr999_series()
+
+    text = webapp.app.json.dumps(payload, allow_nan=False)  # 含 inf/nan 会抛 ValueError
+    assert "Infinity" not in text
+    assert "NaN" not in text
+    assert payload["zones"][-1] == {"label": "高估区", "low": 5.0, "high": None}
+    assert payload["latest"]["zone"] == "高估区"
