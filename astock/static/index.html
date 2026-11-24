@@ -243,7 +243,7 @@
   </div>
 </main>
 
-<script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
+<script src="vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
 <script>
 const LWC = LightweightCharts;
 const el = (id) => document.getElementById(id);
@@ -295,10 +295,12 @@ async function getJSON(url, opts) {
 /* ---------------- 头部与数据状态 ---------------- */
 
 async function loadMeta() {
-  const m = await getJSON('/api/meta');
+  const m = await getJSON('api/meta');
   S.meta = m;
-  const stale = m.stale ? `<span class="badge warn">数据偏旧 ${m.age_days} 天</span>`
-                        : `<span class="badge ok">数据 ${m.latest}</span>`;
+  const stale = !m.latest
+    ? '<span class="badge warn">无数据，后台建库中…</span>'
+    : m.stale ? `<span class="badge warn">数据偏旧 ${m.age_days} 天</span>`
+              : `<span class="badge ok">数据 ${m.latest}</span>`;
   el('meta').innerHTML = `${stale}<span class="only-wide"> · 成本单边 <b>${m.mom_cost_bp}</b>bp · 空仓持 <b>${SHORT[m.mom_bond] || m.mom_bond}</b></span>`;
   el('momPreset').innerHTML = m.presets
     .map((p) => {
@@ -434,7 +436,7 @@ async function loadRelations() {
     const key = q.toString();
     // 下拉/区间来回切同一组合时直接重画缓存，省掉一次 400KB+ 的传输
     const hit = cacheGet(S.relCache, key);
-    const data = hit || await getJSON('/api/relations?' + key);
+    const data = hit || await getJSON('api/relations?' + key);
     if (!hit) cachePut(S.relCache, key, data, 8);
     S.rel = data;
     drawRelations(data);
@@ -693,7 +695,7 @@ async function loadMomentum() {
   try {
     // 回测响应是全页面最重的一份，同一组参数重跑直接复用（默认全历史 600KB+）
     const hit = cacheGet(S.momCache, key);
-    const data = hit || await getJSON('/api/momentum?' + key);
+    const data = hit || await getJSON('api/momentum?' + key);
     if (!hit) cachePut(S.momCache, key, data, 3);
     S.mom = data;
     drawMomentum(data);
@@ -865,11 +867,11 @@ async function doRefresh() {
   btn.disabled = true;
   btn.textContent = '采集…';
   try {
-    const started = await getJSON('/api/refresh', { method: 'POST' });
+    const started = await getJSON('api/refresh', { method: 'POST' });
     if (!started.started) throw new Error(started.reason || '未能启动');
     for (let i = 0; i < 60; i += 1) {
       await new Promise((r) => setTimeout(r, 1000));
-      const m = await getJSON('/api/meta');
+      const m = await getJSON('api/meta');
       if (!m.refresh.running) {
         if (m.refresh.error) throw new Error(m.refresh.error);
         const last = m.refresh_last || {};
@@ -933,6 +935,19 @@ el('momYearly').addEventListener('click', (ev) => {
   wrapper.insertAdjacentHTML('beforeend', ydetailHTML(S.mom, Number(button.dataset.year)));
 });
 
+/* 首次部署时库里还没有 CSV（data/ 不入库），后端会在第一个 GET 上自愈起采集：
+   这里轮询到出数为止，期间不拉关系图/回测（空库只会 400） */
+async function waitForData() {
+  for (let i = 0; i < 120; i += 1) {
+    const m = await getJSON('api/meta');
+    if (m.refresh && m.refresh.error) throw new Error(m.refresh.error);
+    if (m.latest) return loadMeta();
+    el('meta').innerHTML = `<span class="badge warn">无数据，后台建库中… ${i * 3}s</span>`;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  throw new Error('建库超时，检查采集源后手动刷新');
+}
+
 (async () => {
   // 两个图表容器都跟着视口走，先挂上尺寸监听（图表还没建时 getChart() 返回 null，安全）
   watchFit('chartRel', () => S.relChart);
@@ -940,8 +955,9 @@ el('momYearly').addEventListener('click', (ev) => {
   try {
     // meta 提供 presets 和默认勾选，两个视图的参数都靠它，所以先等它落地；
     // 之后关系图与回测互不依赖，并行拉，移动端少一个往返
-    await loadMeta();
+    const m = await loadMeta();
     buildChips();
+    if (!m.latest) await waitForData();     // 服务器首次访问：等自愈采集落地，再拉两个视图
     await Promise.all([loadRelations(), loadMomentum()]);
   } catch (err) {
     el('meta').innerHTML = `<span class="badge warn">${err.message}</span>`;

@@ -725,14 +725,40 @@ def run(*, send: bool = False, write: bool = False, today: str | None = None,
             "signal": signal, "snapshot": snapshot, "backfilled": filled}
 
 
+CRON_WINDOW = "14:45-15:05"     # pm2 cron 的默认执行窗（14:50 触发，留点抖动余量）
+
+
+def _now() -> pd.Timestamp:
+    """单点取时：测试要把「现在」固定到 21:42 或 14:50，只改这一处。"""
+    return pd.Timestamp.now()
+
+
+def in_cron_window(now: pd.Timestamp, window: str = CRON_WINDOW) -> bool:
+    """pm2 start 会把一次性任务立刻跑一遍，靠这个窗口挡住「部署/重启顺手发一封」。
+
+    窗口写成 "HH:MM-HH:MM"，定宽格式下字符串比大小等价于时间比较，不引额外依赖；
+    15:10 的收盘同步用 --cron 15:05-15:30 复用同一套守卫。
+    """
+    lo, _, hi = window.partition("-")
+    stamp = now.strftime("%H:%M")
+    return lo <= stamp < hi
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="双动量轮动每日 14:50 检测 + 邮件")
     parser.add_argument("--send", action="store_true", help="真的发邮件（默认只打印）")
     parser.add_argument("--write", action="store_true", help="把当日盘中行写进 CSV（默认不写）")
     parser.add_argument("--date", help="覆盖日期（YYYY-MM-DD），补跑用")
+    parser.add_argument("--cron", nargs="?", const=CRON_WINDOW, metavar="HH:MM-HH:MM",
+                        help=f"pm2 cron 模式：只在窗口内执行（默认 {CRON_WINDOW}），其余时间直接退出")
     args = parser.parse_args(argv)
 
-    result = run(send=args.send, write=args.write, today=args.date)
+    now = _now()
+    if args.cron and not in_cron_window(now, args.cron):
+        print(f"{now:%H:%M} 不在 {args.cron} 窗口内，pm2 cron 模式跳过（本次不干活）")
+        return 0
+
+    result = run(send=args.send, write=args.write, today=args.date, now=now)
     if result["reason"] in {"weekend", "non-trading-day"}:
         print(f"{result['date']} 非交易日，跳过")
         return 0

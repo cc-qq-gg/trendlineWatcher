@@ -1872,6 +1872,13 @@ def btc_strategy_payload():
         return app.response_class(handle.read(), mimetype='application/json')
 
 
+# A 股页面挂在同一端口、同一套登录 session 下：/biga（库缺失时页面自己触发补数，
+# 见 astock.service.ensure_data；数据与趋势线互不相干）
+from astock.app import init_app as _init_astock_page
+
+_init_astock_page(app, '/biga', require_login=True)
+
+
 if __name__ == '__main__':
     # 创建数据目录
     import os

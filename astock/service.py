@@ -172,6 +172,28 @@ def refresh(path: str | Path | None = None) -> dict:
     return {"started": True}
 
 
+_ENSURE = {"at": 0.0, "interval": 10.0}      # 每次 GET 都 stat 一下文件太碎，10 秒一次够了
+
+
+def ensure_data(path: str | Path | None = None) -> bool:
+    """库缺序列就后台起一次采集；返回「现在有没有数据」。
+
+    服务器首次部署时 data/astock/index_daily.csv 还不存在（该目录不入库），
+    页面不能干等人工去跑 CLI：第一次访问自动补全，前端轮询 meta 直到出数。
+    已在采集时不重复排队（refresh 自己幂等）。
+    """
+    if path is None:
+        now = time.monotonic()
+        if now - _ENSURE["at"] < _ENSURE["interval"]:
+            return bool(_CLOSES)
+        _ENSURE["at"] = now
+    root = _key(path)
+    if not closes(root).empty:
+        return True
+    refresh(root)
+    return False
+
+
 def summary(path: str | Path | None = None) -> str:
     """CLI 用的一屏摘要：数据覆盖 + 两个预设锚点 + 关系图末值。"""
     info = meta(path)
