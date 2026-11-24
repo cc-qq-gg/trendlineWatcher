@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  双动量每日检测：周一到周五 14:50 跑一次 astock.daily --send。
+
+  安装：
+    cp scripts/com.quant.astock-daily.plist ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.quant.astock-daily.plist
+  手动试跑一次：
+    launchctl start com.quant.astock-daily
+  卸载：
+    launchctl unload ~/Library/LaunchAgents/com.quant.astock-daily.plist
+
+  注意：launchd 只在机器醒着时触发。14:50 睡过去了就不会补跑，
+  当天要补就手动 `python -m astock.daily --send --date YYYY-MM-DD`
+  （非交易日会自己跳过，不会误发）。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.quant.astock-daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/cq/projects/quant/quantauto/.venv/bin/python</string>
+    <string>-m</string>
+    <string>astock.daily</string>
+    <string>--send</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/cq/projects/quant/quantauto</string>
+
+  <!-- Weekday：1=周一 … 5=周五（0 和 7 都是周日） -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>50</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/cq/projects/quant/quantauto/data/astock/daily.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/cq/projects/quant/quantauto/data/astock/daily.err.log</string>
+</dict>
+</plist>

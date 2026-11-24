@@ -1,15 +1,17 @@
-import smtplib
 import os
-from email.mime.text import MIMEText
-from email.header import Header
-from datetime import datetime
+import smtplib
 import time
+from datetime import datetime
+from email.header import Header
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 from config_constants import (
-    EMAIL_SMTP_SERVER,
-    EMAIL_SMTP_PORT,
-    EMAIL_USERNAME,
     EMAIL_PASSWORD,
     EMAIL_RECIVER,
+    EMAIL_SMTP_PORT,
+    EMAIL_SMTP_SERVER,
+    EMAIL_USERNAME,
 )
 
 # 发件人和收件人的邮箱地址
@@ -32,15 +34,21 @@ def write_send_log(status, subject="", error=""):
 
 
 # 邮件主题和内容
-def send_email(subject="", content=""):
+def send_email(subject="", content="", html_content=None):
     now = time.time()
     last_email_time = cache["last_email_time_by_subject"].get(subject, 0)
     if (now - last_email_time) < 1800:
         print(f"同一主题30分钟内只能发送一次: {subject}")
         write_send_log("skipped_rate_limit", subject)
         return
-    # 创建邮件对象
-    message = MIMEText(content, "plain", "utf-8")
+    # 创建邮件对象：带 HTML 时发 multipart/alternative，客户端优先渲染 HTML，
+    # 纯文本仍作为兜底（手机邮箱是比例字体，纯文本的空格对齐会塌）
+    if html_content:
+        message = MIMEMultipart("alternative")
+        message.attach(MIMEText(content, "plain", "utf-8"))
+        message.attach(MIMEText(html_content, "html", "utf-8"))
+    else:
+        message = MIMEText(content, "plain", "utf-8")
     message["From"] = Header(f"<{sender}>")
     message["To"] = Header(receiver, "utf-8")
     message["Subject"] = Header(subject, "utf-8")

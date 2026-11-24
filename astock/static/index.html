@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A 股指数 · 关系与双动量轮动</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #131a21; --line: #1f262e; --text: #c9d1d9;
+    --dim: #8b949e; --up: #26a69a; --down: #ef5350; --live: #e3b341;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh;
+    display: flex; flex-direction: column; overflow: hidden;
+    font: 13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  @media (max-width: 600px) {
+    header { gap: 8px 10px; padding: 8px 12px; }
+    .bar { padding: 8px 12px; }
+    .chips { gap: 4px; }
+    .chips button { padding: 3px 9px; }
+    .meta { font-size: 11px; }
+    .only-wide { display: none; }      /* 成本/空仓这些固定信息在手机上让位给「刷新数据」 */
+  }
+  select { max-width: 100%; }
+  h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  .meta { color: var(--dim); font-size: 12px; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .spacer { flex: 1; }
+  .badge { padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid; }
+  .badge.warn { color: #e3b341; border-color: #5c4813; background: #2b2410; }
+  .badge.ok { color: #3fb950; border-color: #238636; background: #12261a; }
+  button, select, input { background: #1b242d; color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 4px 10px; cursor: pointer; font-size: 12px;
+    font-family: inherit; }
+  input { cursor: text; width: 72px; }
+  button:hover, select:hover { border-color: #3d4a57; }
+  button.on { background: #22405f; border-color: #2f6da3; color: #cfe6ff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .tabs { display: flex; gap: 6px; }
+  .tabs button { padding: 5px 14px; font-size: 12px; }
+  main { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  main.on { display: flex; }
+
+  .bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+    border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .bar .k { color: var(--dim); font-size: 11px; letter-spacing: .4px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  /* 周期按钮尾部直接带区间收益：等宽数字，切换周期时按钮宽度不抖 */
+  .chips button .rv { margin-left: 6px; font-style: normal; font-variant-numeric: tabular-nums;
+    color: var(--dim); }
+  .chips button.on .rv { color: var(--text); }
+  .chips button .rv.pos { color: var(--up); }
+  .chips button .rv.neg { color: var(--down); }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
+    border: 1px solid var(--line); border-radius: 12px; font-size: 11px; cursor: pointer;
+    color: var(--dim); user-select: none; }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .chip.on { color: var(--text); border-color: #35506b; background: #16283c; }
+
+  /* 移动端优先：单列、整页纵向滚动、图表定高 */
+  .body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+  .chart-wrap { flex: none; height: 46vh; min-height: 300px; display: flex; flex-direction: column;
+    border-bottom: 1px solid var(--line); }
+  #chartRel, #chartMom { flex: 1; min-height: 0; }
+  .chart-wrap { position: relative; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 7px 12px 3px;
+    color: var(--dim); font-size: 11px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  /* 气泡用 fixed：关系图的 .body 会滚，absolute 会被 overflow 裁掉 */
+  .tip { position: fixed; z-index: 9; pointer-events: none; background: #131a21f2;
+    border: 1px solid #2a3542; border-radius: 7px; padding: 7px 9px; font-size: 11px;
+    line-height: 1.6; box-shadow: 0 8px 24px #0009;
+    max-width: min(340px, calc(100vw - 20px)); }
+  .tip .tip-date { color: #d5dde5; margin-bottom: 3px; }
+  .tip .tip-row { display: flex; align-items: center; gap: 6px;
+    font-variant-numeric: tabular-nums; }
+  .chip input[type="checkbox"] { width: auto; padding: 0; margin: 0; cursor: pointer;
+    accent-color: #58a6ff; }
+  aside { width: 100%; background: var(--panel); border-top: 1px solid var(--line); }
+  .side { background: var(--panel); border-top: 1px solid var(--line); }
+  .sec { padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  .sec .k { color: var(--dim); font-size: 11px; letter-spacing: .5px; }
+  /* 移动端不另开滚动区：.body 已经是滚动容器，套两层手指容易滚错层 */
+  .scroll { overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { padding: 5px 8px; text-align: right; font-size: 11.5px;
+    border-bottom: 1px solid #171e25; white-space: nowrap; }
+  th { color: var(--dim); font-weight: 500; text-align: right; position: sticky; top: 0;
+    background: var(--panel); z-index: 1; }
+  th:first-child, td:first-child { text-align: left; }
+  td.pos { color: var(--up); } td.neg { color: var(--down); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    gap: 8px; padding: 10px 12px; }
+  .card { background: #101821; border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 9px; }
+  .card .k { color: var(--dim); font-size: 10.5px; letter-spacing: .4px; }
+  .card .v { font-size: 15px; font-weight: 600; margin-top: 2px;
+    font-variant-numeric: tabular-nums; }
+  /* 指标卡默认收起：10 张卡在 390px 上要占 4 行，会把图表挤出首屏。
+     摘要里只留 CAGR / Sharpe / 回撤 三个当门面，其余展开看 */
+  .kpi { border: 0; border-bottom: 1px solid var(--line); }
+  .kpi > summary { padding: 7px 12px; display: flex; align-items: baseline; gap: 8px; }
+  .kpi > summary .hint { font-variant-numeric: tabular-nums; }
+  .err { padding: 12px 16px; color: var(--down); }
+  .note { color: var(--dim); font-size: 11px; line-height: 1.6; }
+  details { border-top: 1px solid var(--line); }
+  summary { padding: 7px 12px; cursor: pointer; color: var(--dim); font-size: 11.5px; }
+  summary:hover { color: var(--text); }
+
+  /* 年度收益：一行一年，点开看该年成交 */
+  .panel-head { display: flex; align-items: baseline; gap: 8px; padding: 9px 12px;
+    border-bottom: 1px solid var(--line); }
+  .panel-head b { font-size: 12px; font-weight: 600; }
+  .hint { color: var(--dim); font-size: 10.5px; }
+  .yr { border-bottom: 1px solid #171e25; }
+  .yr-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) 76px; gap: 10px;
+    align-items: center; width: 100%; padding: 9px 12px; min-height: 44px;
+    background: none; border: 0; border-radius: 0; color: var(--text);
+    text-align: left; font: inherit; cursor: pointer; }
+  .yr-row:hover { background: #16202a; }
+  .yr.open .yr-row { background: #16283c; }
+  .yr-y { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .yr-bar { position: relative; height: 9px; border-radius: 5px; background: #0f1620;
+    overflow: hidden; }
+  .yr-bar i { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 5px;
+    background: var(--up); }
+  .yr-bar i.down { background: var(--down); }
+  .yr-v { text-align: right; font-size: 12.5px; font-weight: 600;
+    font-variant-numeric: tabular-nums; }
+  .yr-meta { grid-column: 1 / -1; margin-top: -3px; color: var(--dim); font-size: 10.5px; }
+  .ydetail { background: #101821; padding: 2px 12px 10px; }
+  .ydetail th { background: #101821; }
+  .ydetail .empty { color: var(--dim); font-size: 11px; padding: 8px 0; }
+  .adv { border: 0; }
+  .adv summary { padding: 0; }
+  .adv[open] { flex-basis: 100%; }
+  .adv-body { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-top: 8px; }
+
+  /* 手机/竖屏平板：图表再高一档；chips 各占一整行横滑，栏目标签让位（内容自解释） */
+  @media (max-width: 899px) {
+    .chart-wrap { height: 50vh; }
+    .bar > .k { display: none; }
+    .chips { flex: 1 1 100%; min-width: 0; flex-wrap: nowrap; overflow-x: auto;
+      scrollbar-width: none; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chips > * { flex: 0 0 auto; }
+    /* 手机上这排是 nowrap 横滑：收益跟在周期后面会把「全部」挤出屏幕，
+       改成按钮内换行的小字，5 个周期仍能一屏放下 */
+    .chips button .rv { display: block; margin: 2px 0 0; font-size: 10px; line-height: 1.1;
+      text-align: center; }
+  }
+
+  /* 桌面：关系图左右分栏，轮动用 grid 把指标区压到顶部通栏 */
+  @media (min-width: 900px) {
+    .body { flex-direction: row; overflow: hidden; }
+    .chart-wrap { flex: 1 1 auto; height: auto; min-height: 0; border-bottom: 0; }
+    aside { width: 340px; flex: 0 0 340px; display: flex; flex-direction: column;
+      min-height: 0; border-top: 0; border-left: 1px solid var(--line); }
+    .scroll { flex: 1; min-height: 0; max-height: none; }
+    .body.mom { display: grid; grid-template-columns: minmax(0, 1fr) 360px;
+      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-areas: "kpi kpi" "chart side"; overflow: hidden; }
+    .body.mom .kpi { grid-area: kpi; }
+    .body.mom .chart-wrap { grid-area: chart; }
+    .body.mom .side { grid-area: side; overflow-y: auto; border-top: 0;
+      border-left: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>A 股指数</h1>
+  <div class="tabs">
+    <button id="tabRel" class="on">指数关系</button>
+    <button id="tabMom">双动量轮动</button>
+  </div>
+  <div class="meta" id="meta">加载中…</div>
+  <div class="spacer"></div>
+  <button id="btnRefresh">刷新数据</button>
+</header>
+
+<main id="viewRel" class="on">
+  <div class="bar">
+    <span class="k">序列</span>
+    <div class="chips" id="chips"></div>
+    <div class="spacer"></div>
+    <span class="k">区间</span>
+    <div class="chips" id="ranges"></div>
+    <label class="chip" id="relTipChip">
+      <input type="checkbox" id="relTipOn"> 悬浮提示
+    </label>
+  </div>
+  <div class="body rel">
+    <section class="chart-wrap">
+      <div id="chartRel"></div>
+      <div class="tip" id="relTipBox" hidden></div>
+    </section>
+    <aside>
+      <div class="sec"><div class="k">当前读数</div></div>
+      <div class="scroll" id="relTable"></div>
+    </aside>
+  </div>
+</main>
+
+<main id="viewMom">
+  <div class="bar">
+    <span class="k">区间</span>
+    <div class="chips" id="momRanges"></div>
+    <div class="spacer"></div>
+    <select id="momPreset"></select>
+    <details class="adv">
+      <summary>参数</summary>
+      <div class="adv-body">
+        <span class="k">窗口</span><input id="momWindow" type="number" min="2" max="250" step="1">
+        <span class="k">开仓 %</span><input id="momEntry" type="number" min="-50" max="50" step="0.05">
+        <span class="k">平仓 %</span><input id="momExit" type="number" min="-50" max="50" step="0.05">
+      </div>
+    </details>
+    <button id="momRun">回测</button>
+  </div>
+  <div class="body mom">
+    <details class="kpi" id="momKpi">
+      <summary>指标<span class="hint" id="momKpiHint"></span></summary>
+      <div class="cards" id="momCards"></div>
+    </details>
+    <section class="chart-wrap">
+      <div id="chartMom"></div>
+      <div class="legend" id="momLegend">—</div>
+    </section>
+    <div class="side">
+      <section>
+        <div class="panel-head"><b>年度收益</b><span class="hint">点年份看该年成交</span></div>
+        <div id="momYearly"></div>
+      </section>
+      <details>
+        <summary>敏感性（改一个参数，其余不动）</summary>
+        <div id="momSens"></div>
+      </details>
+      <div class="sec note" id="momNote"></div>
+    </div>
+  </div>
+</main>
+
+<script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
+<script>
+const LWC = LightweightCharts;
+const el = (id) => document.getElementById(id);
+const visible = (id) => el(id).classList.contains('on');
+const COLORS = ['#58a6ff', '#f0883e', '#3fb950', '#db6d28', '#a371f7', '#e3b341', '#26a69a', '#ef5350'];
+const REL_RANGES = [['1 年', 1], ['3 年', 3], ['5 年', 5], ['10 年', 10], ['全部', 0]];
+const MOM_RANGES = [['1 年', 1], ['3 年', 3], ['5 年', 5], ['10 年', 10], ['全部', 0]];
+const SHORT = { 'sz.399006': '创业板指', '513100_PX': '纳指ETF', 'sh.000012': '国债指数' };
+
+const S = {
+  meta: null, codes: [], relYears: 10,
+  rel: null, relChart: null, relSeries: {}, relColors: {},
+  relAligned: null, relTip: false,
+  mom: null, momChart: null, momSeries: {}, momYears: 10, busy: false,
+  // 同一份响应来回切档位不重复下载：键是参数串，值是整个响应体
+  relCache: new Map(), momCache: new Map(),
+};
+
+/* 命中就挪到队尾当「最近使用」，超量从队首丢，手写一个 LRU 够用了 */
+function cacheGet(store, key) {
+  const hit = store.get(key);
+  if (!hit) return null;
+  store.delete(key);
+  store.set(key, hit);
+  return hit;
+}
+
+function cachePut(store, key, value, limit) {
+  store.set(key, value);
+  while (store.size > limit) store.delete(store.keys().next().value);
+}
+
+const fmtPct = (v, d = 2) => (v === null || v === undefined) ? '—' : (v * 100).toFixed(d) + '%';
+const sign = (v) => v > 0 ? 'pos' : (v < 0 ? 'neg' : '');
+// 按钮上的区间收益要短：三位数以上不给小数，否则「1068.42%」会把一排周期按钮撑爆
+const fmtSpan = (v) => {
+  const pct = v * 100;
+  return (Math.abs(pct) >= 100 ? pct.toFixed(0) : pct.toFixed(1)) + '%';
+};
+const day = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+async function getJSON(url, opts) {
+  const resp = await fetch(url, opts);
+  const body = await resp.json().catch(() => ({ error: '响应不是 JSON' }));
+  if (!resp.ok) throw new Error(body.error || ('HTTP ' + resp.status));
+  return body;
+}
+
+/* ---------------- 头部与数据状态 ---------------- */
+
+async function loadMeta() {
+  const m = await getJSON('/api/meta');
+  S.meta = m;
+  const stale = m.stale ? `<span class="badge warn">数据偏旧 ${m.age_days} 天</span>`
+                        : `<span class="badge ok">数据 ${m.latest}</span>`;
+  el('meta').innerHTML = `${stale}<span class="only-wide"> · 成本单边 <b>${m.mom_cost_bp}</b>bp · 空仓持 <b>${SHORT[m.mom_bond] || m.mom_bond}</b></span>`;
+  el('momPreset').innerHTML = m.presets
+    .map((p) => {
+      // 下拉只放名字，窗口/开仓/平仓塞 title 与「参数」面板，移动端不再被截断
+      const detail = `${p.window}日 / ${(p.entry * 100).toFixed(2)}% / ${(p.exit_threshold * 100).toFixed(2)}%`;
+      return `<option value="${p.key}" title="${detail}">${p.label}</option>`;
+    })
+    .join('');
+  applyPreset('optimized');
+  el('momNote').textContent = m.presets.find((p) => p.key === 'optimized').note;
+  return m;
+}
+
+function applyPreset(key) {
+  const p = (S.meta.presets || []).find((item) => item.key === key);
+  if (!p) return;
+  el('momPreset').value = key;
+  el('momWindow').value = p.window;
+  el('momEntry').value = (p.entry * 100).toFixed(2);
+  el('momExit').value = (p.exit_threshold * 100).toFixed(2);
+}
+
+/* ---------------- 指数关系 ---------------- */
+
+function buildChips() {
+  // derived 只表示「不落库、由其他序列现算」，照样要展示（ERP 就是现算的）
+  const pick = S.meta.catalog.filter((c) => !c.internal);
+  // 默认只勾后端给的 上证 / 沪深300 / 股债性价比；老接口没有这个字段时退回全选
+  const defaults = new Set(S.meta.relation_default_codes || []);
+  const picked = (code) => (defaults.size ? defaults.has(code) : true);
+  S.codes = pick.filter((c) => picked(c.code)).map((c) => c.code);
+  if (!S.codes.length) S.codes = pick.map((c) => c.code);
+  const colors = {};
+  // 分位序列的默认色和指数会撞车（深橙 vs 创业板橙），单独挑一个粉，图例和折线同源
+  const OVERRIDE = { HS300_PE: '#e06c9f' };
+  pick.forEach((c, i) => { colors[c.code] = OVERRIDE[c.code] || COLORS[i % COLORS.length]; });
+  S.relColors = colors;
+  el('chips').innerHTML = pick.map((c) => `
+    <span class="chip ${picked(c.code) ? 'on' : ''}" data-code="${c.code}" style="color:${colors[c.code]}">
+      <span class="dot"></span>${c.name}
+    </span>`).join('');
+  el('chips').querySelectorAll('.chip').forEach((node) => {
+    node.onclick = () => {
+      const code = node.dataset.code;
+      if (S.codes.includes(code)) {
+        if (S.codes.length === 1) return;      // 至少留一条
+        S.codes = S.codes.filter((c) => c !== code);
+        node.classList.remove('on');
+      } else {
+        S.codes.push(code);
+        node.classList.add('on');
+      }
+      loadRelations();
+    };
+  });
+
+  el('ranges').innerHTML = REL_RANGES
+    .map(([label, years]) => `<button data-years="${years}" class="${years === S.relYears ? 'on' : ''}">${label}</button>`)
+    .join('');
+  el('ranges').querySelectorAll('button').forEach((node) => {
+    node.onclick = () => {
+      S.relYears = Number(node.dataset.years);
+      el('ranges').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === node));
+      loadRelations();
+    };
+  });
+}
+
+function relChart() {
+  if (S.relChart) return S.relChart;
+  const chart = LWC.createChart(el('chartRel'), {
+    autoSize: true,
+    // attributionLogo：右下角的 TradingView 水印不画，关系图只留坐标与线
+    layout: { background: { color: '#0d1117' }, textColor: '#9aa4ae', fontSize: 11, attributionLogo: false },
+    grid: { vertLines: { color: '#171e25' }, horzLines: { color: '#171e25' } },
+    // 左边距对齐 bigA：左轴留 6%（它的 computeNiceScale 就是 ±5%，这里多留一点避免最下面的刻度被切）
+    // 右轴 0–100 留 2%，tickMarkDensity 拉大把刻度从 20 档压到 6 档左右（这个值越大越稀）
+    leftPriceScale: {
+      visible: true,
+      borderColor: '#1f262e',
+      scaleMargins: { top: 0.06, bottom: 0.09 },
+    },
+    rightPriceScale: {
+      visible: false,
+      borderColor: '#1f262e',
+      scaleMargins: { top: 0.02, bottom: 0.02 },
+      tickMarkDensity: 10,
+    },
+    // 和 bigA 一样只看不拖：关掉滚轮缩放，移动端竖向滑动还能把页面滚下去
+    handleScroll: false,
+    handleScale: false,
+    // minBarSpacing 默认 0.5：12 年 3132 根塞进 390px 需要 0.12px/根，被夹住后
+    // fitContent 只能显示最近两三年，横轴看着像「被裁掉了」
+    timeScale: { borderColor: '#1f262e', rightOffset: 2, minBarSpacing: 0.02 },
+    crosshair: { mode: relCrossMode() },
+  });
+  chart.subscribeCrosshairMove(onRelHover);
+  S.relChart = chart;
+  return chart;
+}
+
+/* 悬浮提示默认关闭（页面上有开关），关掉时连十字线一起收起来 */
+function relCrossMode() {
+  const mode = LWC.CrosshairMode || {};
+  return S.relTip ? (mode.Normal ?? 0) : (mode.Hidden ?? 2);
+}
+
+function applyRelTip() {
+  if (S.relChart) S.relChart.applyOptions({ crosshair: { mode: relCrossMode() } });
+  if (!S.relTip) hideRelTip();
+}
+
+/* 容器一变宽，LWC 的「每根 K 多宽」不会自己重算：还是按旧宽度算的 barSpacing，
+   于是 10 年的线只占几百像素、左边空一大片（手机转横屏、拖窗口都会中招）。
+   fitContent 会按当前宽度重算，所以直接盯容器尺寸，量到新宽度再补一次 */
+const fitTimers = {};
+function watchFit(id, getChart) {
+  const node = el(id);
+  if (!node || !('ResizeObserver' in window)) return;
+  new ResizeObserver(() => {
+    clearTimeout(fitTimers[id]);
+    fitTimers[id] = setTimeout(() => getChart()?.timeScale().fitContent(), 120);
+  }).observe(node);
+}
+
+async function loadRelations() {
+  if (S.busy) return;
+  S.busy = true;
+  try {
+    const q = new URLSearchParams({ codes: S.codes.join(',') });
+    const start = windowStart();
+    if (start) q.set('start', start);          // 分位在后端全历史算完再裁，这里只裁下发量
+    const key = q.toString();
+    // 下拉/区间来回切同一组合时直接重画缓存，省掉一次 400KB+ 的传输
+    const hit = cacheGet(S.relCache, key);
+    const data = hit || await getJSON('/api/relations?' + key);
+    if (!hit) cachePut(S.relCache, key, data, 8);
+    S.rel = data;
+    drawRelations(data);
+  } catch (err) {
+    el('relTable').innerHTML = `<div class="err">${err.message}</div>`;
+  } finally {
+    S.busy = false;
+  }
+}
+
+/* 区间起点：以数据末日为基准往回推，避免用本机当天日期把窗口算飘 */
+function windowStart() {
+  if (!S.relYears) return '';
+  const last = S.meta && S.meta.latest ? Date.parse(S.meta.latest) : Date.now();
+  return day(last - S.relYears * 365.25 * 86400000);
+}
+
+const REL_PCT_GUIDES = [20, 80];     // 分位极值参考线，抄 bigA 的 PERCENTILE_GUIDES
+
+function fmtNum(value, digits = 2) {
+  const number = Number(value);
+  if (value === null || value === undefined || !Number.isFinite(number)) return '—';
+  return number.toFixed(digits);
+}
+
+/* 点的原始读数：分位序列取 raw（PE、PMI 本身），左轴序列把重定基乘回窗口基准 */
+function relRawValue(item, point) {
+  if (item.display === 'percentile') return point.raw === undefined ? null : point.raw;
+  if (item.base === null || item.base === undefined) return point.v;
+  return point.v * item.base / 100;
+}
+
+/* 图例与悬停文案，口径同 bigA：左轴「原始点位（区间 +x%）」、右轴「第 n 分位（原值 x）」
+   重定基 v 本身就是百分数，区间涨幅 = v − 100 */
+function relValueText(item, point) {
+  if (item.display === 'percentile') {
+    const raw = relRawValue(item, point);
+    const suffix = item.unit === '%' ? '%' : (item.unit ? ` ${item.unit}` : '');
+    return `第 ${fmtNum(point.v)} 分位（原值 ${raw === null ? '—' : fmtNum(raw) + suffix}）`;
+  }
+  const change = Number.isFinite(Number(point.v)) ? point.v - 100 : NaN;
+  const text = Number.isFinite(change) ? `${change >= 0 ? '+' : ''}${change.toFixed(2)}%` : '—';
+  return `${fmtNum(relRawValue(item, point))}（区间 ${text}）`;
+}
+
+function relPlotValue(item, point) {
+  if (point.v === null) return null;
+  return item.display === 'percentile' ? point.v : relRawValue(item, point);
+}
+
+function relAxisLabel(value) {
+  return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(2);
+}
+
+/* 日期取并集后前向填充：首点之前与末点之后留 null（bigA buildAlignedSeries 同口径） */
+function relForward(points, index, total, pick) {
+  const out = new Array(total).fill(null);
+  let lastIndex = -1;
+  points.forEach((point) => {
+    const at = index.get(point.t);
+    if (at === undefined) return;
+    out[at] = pick(point);
+    lastIndex = at;
+  });
+  let previous = null;
+  for (let i = 0; i <= lastIndex; i += 1) {
+    if (out[i] === null) out[i] = previous;
+    else previous = out[i];
+  }
+  return out;
+}
+
+function drawRelations(data) {
+  renderRelTable(data);
+  // 隐藏标签页里容器宽 0，此时 createChart 会退回 300px 默认宽度、fitContent 也只按
+  // 300px 算区间（切回来就只剩最近半年）。所以只在可见时建图，切回来由 switchTab 补画
+  if (!visible('viewRel')) return;
+  const chart = relChart();
+  applyRelTip();
+
+  Object.values(S.relSeries).forEach((line) => chart.removeSeries(line));
+  S.relSeries = {};
+  S.relAligned = null;
+
+  const list = data.series.filter((item) => item.points.length);
+  if (!list.length) return;
+  const union = new Set();
+  list.forEach((item) => item.points.forEach((point) => union.add(point.t)));
+  const dates = [...union].sort((a, b) => a - b);
+  const index = new Map(dates.map((stamp, i) => [stamp, i]));
+  // PE 周频、PMI 月频对齐到日线后是阶梯，不是折线插值，这样才和 bigA 的走势一样
+  const aligned = list.map((item) => ({
+    item,
+    axis: item.display === 'percentile' ? 'right' : 'left',
+    values: relForward(item.points, index, dates.length, (point) => relPlotValue(item, point)),
+    rebases: relForward(item.points, index, dates.length, (point) => point.v),
+    raws: relForward(item.points, index, dates.length, (point) => relRawValue(item, point)),
+  }));
+
+  const hasLeft = aligned.some((row) => row.axis === 'left');
+  const hasRight = aligned.some((row) => row.axis === 'right');
+  chart.applyOptions({
+    leftPriceScale: { visible: hasLeft },
+    rightPriceScale: { visible: hasRight },
+  });
+
+  let guideSource = null;
+  aligned.forEach(({ item, axis, values }) => {
+    const color = S.relColors[item.code] || COLORS[0];
+    const line = chart.addSeries(LWC.LineSeries, {
+      color,
+      lineWidth: axis === 'right' ? 1 : 2,
+      priceScaleId: axis,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      priceFormat: axis === 'right'
+        ? { type: 'custom', formatter: (value) => value.toFixed(0) }
+        : { type: 'custom', formatter: relAxisLabel },
+      // 右轴固定 0–100，跟「分位」的定义对齐；交给 LWC 自动缩放会把 40–80 的分位拉满整高
+      ...(axis === 'right' ? { autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }) } : {}),
+    }, 0);
+    const body = [];
+    let last = null;
+    values.forEach((value, i) => {
+      const time = dates[i] / 1000;
+      if (value === null) {
+        body.push({ time });                      // 空白点：序列首日之前不连线
+        return;
+      }
+      body.push({ time, value });
+      last = { time, value };
+    });
+    line.setData(body);
+    if (last) {
+      // 末点圆点，对应 bigA 在最后一点画的 2.6px 实心圆
+      LWC.createSeriesMarkers(line, [{ time: last.time, position: 'inBar', shape: 'circle', color, size: 1 }]);
+    }
+    if (axis === 'right' && !guideSource) guideSource = line;
+    S.relSeries[item.code] = line;
+  });
+
+  if (guideSource) {
+    REL_PCT_GUIDES.forEach((price) => guideSource.createPriceLine({
+      price,
+      color: '#3d4b5a',
+      lineWidth: 1,
+      lineStyle: LWC.LineStyle?.Dashed ?? 2,
+      axisLabelVisible: false,
+      title: '',
+    }));
+  }
+
+  S.relAligned = { dates, aligned };
+  chart.timeScale().fitContent();
+}
+
+function hideRelTip() {
+  const box = el('relTipBox');
+  if (box) box.hidden = true;
+}
+
+function onRelHover(param) {
+  if (!S.relTip || !S.relAligned || !param || param.time === undefined || !param.point) {
+    hideRelTip();
+    return;
+  }
+  const { dates, aligned } = S.relAligned;
+  const wanted = Number(param.time) * 1000;
+  let lo = 0;
+  let hi = dates.length - 1;
+  while (lo < hi) {                              // param.time 一定落在并集里
+    const mid = (lo + hi) >> 1;
+    if (dates[mid] < wanted) lo = mid + 1;
+    else hi = mid;
+  }
+  if (dates[lo] !== wanted) {
+    hideRelTip();
+    return;
+  }
+  const rows = aligned.map(({ item, values, rebases, raws }) => {
+    const value = values[lo];
+    if (value === null) return '';
+    const color = S.relColors[item.code] || COLORS[0];
+    // 文案里要的是「重定基 + 原始读数」，values[lo] 已经是画图用的原始点位，不能直接喂
+    return `<div class="tip-row"><i class="legend-dot" style="background:${color}"></i>`
+      + `${item.name} ${relValueText(item, { v: rebases[lo], raw: raws[lo] })}</div>`;
+  }).join('');
+  const box = el('relTipBox');
+  box.innerHTML = `<div class="tip-date">${day(wanted)}</div>${rows}`;
+  box.hidden = false;
+  // fixed + 视口坐标：气泡贴在图表顶部，横向按可用宽度反折，不会被滚动容器裁掉
+  const area = el('chartRel').getBoundingClientRect();
+  const width = box.offsetWidth;
+  let left = area.left + param.point.x + 16;
+  if (left + width > window.innerWidth - 8) left = area.left + param.point.x - width - 16;
+  box.style.left = `${Math.max(8, left)}px`;
+  box.style.top = `${Math.max(8, area.top + 10)}px`;
+}
+
+function renderRelTable(data) {
+  const rows = data.series.map((item) => {
+    const last = item.points[item.points.length - 1];
+    let value = '—';
+    if (last && item.display === 'percentile') {
+      value = `${fmtNum(last.v, 1)} <span style="color:#8b949e">分位</span>`;
+    } else if (last) {
+      const change = last.v - 100;
+      value = `${fmtNum(relRawValue(item, last))} <span style="color:#8b949e">`
+        + `${change >= 0 ? '+' : ''}${change.toFixed(1)}%</span>`;
+    }
+    return `<tr>
+      <td style="color:${S.relColors[item.code] || '#c9d1d9'}">${item.name}</td>
+      <td>${value}</td>
+      <td style="color:#8b949e">${last ? day(last.t) : '—'}</td>
+    </tr>`;
+  }).join('');
+  el('relTable').innerHTML = `<table>
+    <thead><tr><th>序列</th><th>最新</th><th>日期</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+/* ---------------- 双动量轮动 ---------------- */
+
+function momChart() {
+  if (S.momChart) return S.momChart;
+  const chart = LWC.createChart(el('chartMom'), {
+    autoSize: true,
+    layout: { background: { color: '#0d1117' }, textColor: '#9aa4ae', fontSize: 11 },
+    grid: { vertLines: { color: '#171e25' }, horzLines: { color: '#171e25' } },
+    rightPriceScale: { borderColor: '#1f262e', scaleMargins: { top: 0.1, bottom: 0.1 } },
+    // minBarSpacing 默认 0.5：12 年 3132 根塞进 390px 需要 0.12px/根，被夹住后
+    // fitContent 只能显示最近两三年，横轴看着像「被裁掉了」
+    timeScale: { borderColor: '#1f262e', rightOffset: 4, minBarSpacing: 0.02 },
+    crosshair: { mode: LWC.CrosshairMode.Normal },
+  });
+  chart.panes()[0].setStretchFactor(2);
+  S.momChart = chart;
+  return chart;
+}
+
+async function loadMomentum() {
+  const input = (id, scale = 1) => {
+    const raw = el(id).value.trim();
+    return raw === '' ? null : String(Number(raw) / scale);
+  };
+  const q = new URLSearchParams({ preset: el('momPreset').value });
+  const win = input('momWindow');
+  const entry = input('momEntry', 100);
+  const exit = input('momExit', 100);
+  if (win !== null) q.set('window', win);
+  if (entry !== null) q.set('entry', entry);
+  if (exit !== null) q.set('exit_threshold', exit);
+  // 只传 years，不传 start：后端把「最近 N 年」当区间；都不传即全历史
+  if (S.momYears) q.set('years', S.momYears);
+  const key = q.toString();
+  try {
+    // 回测响应是全页面最重的一份，同一组参数重跑直接复用（默认全历史 600KB+）
+    const hit = cacheGet(S.momCache, key);
+    const data = hit || await getJSON('/api/momentum?' + key);
+    if (!hit) cachePut(S.momCache, key, data, 3);
+    S.mom = data;
+    drawMomentum(data);
+  } catch (err) {
+    el('momLegend').innerHTML = `<span style="color:#ef5350">${err.message}</span>`;
+  }
+}
+
+const MOM_SERIES = [
+  ['STRATEGY', '策略', '#e3b341', 2.5],
+  ['sz.399006', '创业板指', '#58a6ff', 1.5],
+  ['513100_PX', '纳指ETF', '#3fb950', 1.5],
+  ['sh.000012', '国债指数', '#8b949e', 1.5],
+];
+
+function drawMomentum(data) {
+  renderMomCards(data);
+  renderRangeSpans(data);
+  renderYears(data);
+  renderMomTable('momSens', ['标签', 'CAGR', 'Sharpe', '回撤', '换仓'],
+    data.sensitivity.map((row) => [row.label, fmtPct(row.cagr), row.sharpe.toFixed(2), fmtPct(row.maxdd), row.switches]),
+    [1, 2, 3]);
+  // 同上：图表只在可见时创建，隐藏时 drawMomentum 只负责文字块
+  if (!visible('viewMom')) return;
+
+  const chart = momChart();
+  Object.values(S.momSeries).forEach((line) => chart.removeSeries(line));
+  S.momSeries = {};
+
+  data.series.forEach((item) => {
+    const spec = MOM_SERIES.find((row) => row[0] === item.code);
+    if (!spec) return;
+    const line = chart.addSeries(LWC.LineSeries, {
+      color: spec[2], lineWidth: spec[3], priceLineVisible: false, lastValueVisible: false,
+      priceFormat: { type: 'custom', formatter: (v) => v.toFixed(1) },
+    }, 0);
+    line.setData(item.points.map((p) => ({ time: p.t / 1000, value: p.v })));
+    S.momSeries[item.code] = line;
+  });
+
+  const dd = chart.addSeries(LWC.AreaSeries, {
+    lineColor: '#ef5350', topColor: 'rgba(239,83,80,0)', bottomColor: 'rgba(239,83,80,0.35)',
+    priceLineVisible: false, lastValueVisible: false,
+    priceFormat: { type: 'custom', formatter: (v) => (v * 100).toFixed(1) + '%' },
+  }, 1);
+  dd.setData(data.drawdown.map((p) => ({ time: p.t / 1000, value: p.v })));
+  S.momSeries.drawdown = dd;
+  chart.panes()[1]?.setStretchFactor(1);        // 净值:回撤 = 2:1，总高度不变
+
+  chart.timeScale().fitContent();
+  el('momLegend').innerHTML = MOM_SERIES
+    .map(([code, name, color]) => `<span style="color:${color}">${name}</span>`)
+    .join(' · ') + ' · 下方面积＝策略回撤';
+}
+
+// 每个周期按钮后面直接写该区间收益，切换周期不用再去 KPI 卡里找「区间总收益」
+function renderRangeSpans(data) {
+  const spans = new Map((data.spans || []).map((row) => [row.years, row]));
+  el('momRanges').querySelectorAll('button').forEach((node) => {
+    const hit = spans.get(Number(node.dataset.years));
+    const slot = node.querySelector('.rv');
+    if (!slot) return;
+    slot.textContent = hit ? fmtSpan(hit.total) : '';
+    slot.className = 'rv' + (hit ? ' ' + sign(hit.total) : '');
+  });
+}
+
+function renderYears(data) {
+  const rows = data.yearly;
+  if (!rows.length) {
+    el('momYearly').innerHTML = '<div class="ydetail"><div class="empty">区间内无数据</div></div>';
+    return;
+  }
+  // 条宽以区间内最大 |年收益| 归一化，正负同尺度才能横比
+  const maxAbs = Math.max(1e-9, ...rows.map((row) => Math.abs(row.return || 0)));
+  const startYear = Number(data.meta.start.slice(0, 4));
+  const endYear = Number(data.meta.end.slice(0, 4));
+  el('momYearly').innerHTML = rows.map((row) => {
+    const width = Math.min(100, Math.abs(row.return || 0) / maxAbs * 100).toFixed(1);
+    const tone = row.return > 0 ? 'pos' : (row.return < 0 ? 'neg' : '');
+    const edge = row.year === endYear ? `至 ${data.meta.end}`
+      : (row.year === startYear ? `自 ${data.meta.start}` : '');
+    const meta = [
+      row.count ? `${row.count} 段 · 胜率 ${fmtPct(row.win_rate)} · 均持 ${row.avg_days ?? '—'} 天`
+        : (edge ? '无持仓段' : '全年空仓（持国债指数）'),
+      edge,
+    ].filter(Boolean).join(' · ');
+    return `<div class="yr">
+      <button class="yr-row" data-year="${row.year}" aria-expanded="false">
+        <span class="yr-y">${row.year}</span>
+        <span class="yr-bar"><i class="${tone === 'neg' ? 'down' : ''}" style="width:${width}%"></i></span>
+        <span class="yr-v ${tone}">${fmtPct(row.return)}</span>
+        <span class="yr-meta">${meta}</span>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function ydetailHTML(data, year) {
+  const rows = data.trades.filter((trade) => Number(trade.date.slice(0, 4)) === year);
+  if (!rows.length) return '<div class="ydetail"><div class="empty">该年没有成交</div></div>';
+  const tbody = rows.map((trade) => {
+    const buy = trade.side === 'buy';
+    return `<tr>
+      <td>${trade.date.slice(5)}</td>
+      <td class="${buy ? 'pos' : 'neg'}">${buy ? '买入' : '卖出'}</td>
+      <td>${SHORT[trade.code] || trade.code}</td>
+      <td>${trade.price}</td>
+      <td class="${sign(trade.ret)}">${trade.ret === null ? '—' : fmtPct(trade.ret)}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="ydetail"><table>
+    <thead><tr><th>日期</th><th>动作</th><th>标的</th><th>价</th><th>段收益</th></tr></thead>
+    <tbody>${tbody}</tbody></table></div>`;
+}
+
+function renderMomCards(data) {
+  const top = data.metrics[0];
+  // 收起状态只看摘要这一行，完整 10 项展开「指标」才占版面
+  el('momKpiHint').textContent =
+    `CAGR ${fmtPct(top.cagr)} · Sharpe ${top.sharpe.toFixed(2)} · 回撤 ${fmtPct(top.maxdd)}`;
+  const cards = [
+    ['CAGR', fmtPct(top.cagr)], ['Sharpe', top.sharpe.toFixed(2)],
+    ['最大回撤', fmtPct(top.maxdd)], ['Calmar', top.calmar.toFixed(2)],
+    ['区间总收益', fmtPct(top.total)], ['年换手', top.turnover.toFixed(2)],
+    ['换仓次数', top.switches], ['月度胜率', fmtPct(top.win_rate)],
+    ['空仓占比', fmtPct(top.bond_pct)], ['交易年数', data.meta.years.toFixed(1)],
+  ];
+  el('momCards').innerHTML = cards
+    .map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`)
+    .join('');
+}
+
+function renderMomTable(id, head, rows, pctCols) {
+  const thead = head.map((h) => `<th>${h}</th>`).join('');
+  const tbody = rows.map((row) => {
+    const cells = row.map((cell, i) => {
+      const numeric = typeof cell === 'number' || /^-?[\d.]+%?$/.test(String(cell));
+      const cls = pctCols.includes(i) && numeric ? sign(parseFloat(String(cell).replace('%', ''))) : '';
+      return `<td class="${cls}">${cell}</td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  el(id).innerHTML = `<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+}
+
+/* ---------------- 交互 ---------------- */
+
+function switchTab(which) {
+  el('viewRel').classList.toggle('on', which === 'rel');
+  el('viewMom').classList.toggle('on', which === 'mom');
+  el('tabRel').classList.toggle('on', which === 'rel');
+  el('tabMom').classList.toggle('on', which === 'mom');
+  // 隐藏期间容器尺寸为 0，切回来要让图表重新量一次
+  requestAnimationFrame(() => {
+    if (which === 'rel') {
+      if (!S.relChart && S.rel) drawRelations(S.rel);   // 隐藏时只填了表格，图在这里补建
+      S.relChart?.timeScale().fitContent();
+    }
+    if (which === 'mom') {
+      if (!S.momChart && S.mom) drawMomentum(S.mom);
+      S.momChart?.timeScale().fitContent();
+    }
+  });
+}
+
+async function doRefresh() {
+  const btn = el('btnRefresh');
+  btn.disabled = true;
+  btn.textContent = '采集…';
+  try {
+    const started = await getJSON('/api/refresh', { method: 'POST' });
+    if (!started.started) throw new Error(started.reason || '未能启动');
+    for (let i = 0; i < 60; i += 1) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const m = await getJSON('/api/meta');
+      if (!m.refresh.running) {
+        if (m.refresh.error) throw new Error(m.refresh.error);
+        const last = m.refresh_last || {};
+        // 带上下闸日期：盘中刷新只会补到上一个交易日，只写「新增 0 行」会让人以为失败
+        const cut = last.cutoff ? ` 至 ${last.cutoff.slice(5)}` : '';
+        btn.textContent = `新增 ${last.added ?? 0} 行${cut}`;
+        // 数据换了，两层前端缓存（以及后端的 LRU）都过期，必须清掉再拉
+        S.relCache.clear();
+        S.momCache.clear();
+        await loadMeta();
+        await loadRelations();
+        await loadMomentum();
+        return;
+      }
+    }
+    btn.textContent = '采集超时';
+  } catch (err) {
+    btn.textContent = '刷新失败';
+    el('meta').insertAdjacentHTML('beforeend', ` <span class="badge warn">${err.message}</span>`);
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = '刷新数据'; }, 1600);
+  }
+}
+
+el('tabRel').onclick = () => switchTab('rel');
+el('tabMom').onclick = () => switchTab('mom');
+el('btnRefresh').onclick = doRefresh;
+el('relTipOn').onchange = (ev) => {
+  S.relTip = ev.target.checked;
+  el('relTipChip').classList.toggle('on', S.relTip);
+  applyRelTip();
+};
+el('momPreset').onchange = (ev) => { applyPreset(ev.target.value); loadMomentum(); };
+el('momRun').onclick = loadMomentum;
+
+el('momRanges').innerHTML = MOM_RANGES
+  .map(([label, years]) => `<button data-years="${years}" class="${years === S.momYears ? 'on' : ''}">${label}<i class="rv"></i></button>`)
+  .join('');
+el('momRanges').querySelectorAll('button').forEach((node) => {
+  node.onclick = () => {
+    S.momYears = Number(node.dataset.years);
+    el('momRanges').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === node));
+    loadMomentum();
+  };
+});
+
+el('momYearly').addEventListener('click', (ev) => {
+  const button = ev.target.closest('.yr-row');
+  if (!button) return;
+  const wrapper = button.parentElement;
+  const open = !wrapper.classList.contains('open');
+  // 一次只展开一年：移动端竖向列表展开多个会滚成一长条
+  el('momYearly').querySelectorAll('.yr.open').forEach((node) => {
+    node.classList.remove('open');
+    node.querySelector('.yr-row').setAttribute('aria-expanded', 'false');
+    node.querySelector('.ydetail')?.remove();
+  });
+  if (!open) return;
+  wrapper.classList.add('open');
+  button.setAttribute('aria-expanded', 'true');
+  wrapper.insertAdjacentHTML('beforeend', ydetailHTML(S.mom, Number(button.dataset.year)));
+});
+
+(async () => {
+  // 两个图表容器都跟着视口走，先挂上尺寸监听（图表还没建时 getChart() 返回 null，安全）
+  watchFit('chartRel', () => S.relChart);
+  watchFit('chartMom', () => S.momChart);
+  try {
+    // meta 提供 presets 和默认勾选，两个视图的参数都靠它，所以先等它落地；
+    // 之后关系图与回测互不依赖，并行拉，移动端少一个往返
+    await loadMeta();
+    buildChips();
+    await Promise.all([loadRelations(), loadMomentum()]);
+  } catch (err) {
+    el('meta').innerHTML = `<span class="badge warn">${err.message}</span>`;
+  }
+})();
+</script>
+</body>
+</html>
