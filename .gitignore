@@ -17,6 +17,8 @@ cookies.txt
 *.log
 logs/
 config_constants.py
+# 手滑拼错的文件名（config_constanst.py 之类）同样含密钥，别让它混进仓库
+config_constan*.py
 
 # IDE和编辑器文件
 .vscode/

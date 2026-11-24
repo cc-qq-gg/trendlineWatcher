@@ -45,6 +45,18 @@ echo "同步环境（uv.lock）…"
   exit 1
 }
 
+# 把解释器版本写进部署日志：uv 会按 .python-version 选解释器，但选错时（例如回落到
+# 系统的 Python 3.14）报错长在 gevent/TA-Lib 的编译阶段，从堆栈里根本看不出是哪来的
+# 3.14。这里打一行，出问题时和 uv.lock 对一下就知道环境对不对。
+PY_VER="$("$UV_BIN" run --no-sync python -V 2>&1 || echo '取不到')"
+UV_VER="$("$UV_BIN" --version 2>/dev/null | awk '{print $2}')" || UV_VER="?"
+echo "解释器：${PY_VER}；uv ${UV_VER}"
+case "${PY_VER}" in
+  *3.11*|*3.12*) ;;
+  *) echo "警告：解释器不是 3.11/3.12，uv.lock 是按 3.12 生成的（见 .python-version），" \
+          "gevent==23.9.1 在 3.13+ 没有 wheel、会退回源码编译并失败" ;;
+esac
+
 # A 股库（data/）不入库：缺了就先建一次。页面首次访问也会自愈触发采集，但 CLI 建库
 # 能立刻看到结果，首次部署不必靠「打开页面等 10 秒」
 if [ ! -f data/astock/index_daily.csv ]; then
