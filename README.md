@@ -4,18 +4,25 @@ Cryptocurrency automated trading system based on trendline breakout and StochRSI
 
 ## Quick Start
 
+The environment is defined once by `pyproject.toml` + `uv.lock` — use `uv`, not pip.
+
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Sync dependencies (creates .venv from uv.lock)
+uv sync
 
-# Launch Web interface
-python TrendlineWebApp.py
+# Full monitoring system: trendline pages + A-share page at /biga + stock scheduler (port 5000)
+uv run run_trendline_monitor.py
 
-# Or start complete monitoring system
-python run_trendline_monitor.py
+# A-share page only, local debug (port 8012)
+uv run python -m astock.app
+
+# Production: all services and cron jobs under pm2
+bash scripts/pm2_start.sh
 ```
 
-Web interface: http://localhost:5000
+Web interface: http://localhost:5000 · A-share page: http://localhost:5000/biga/
+
+`requirements.txt` is kept for legacy installs only — it is missing `requests`, `schedule` and `ta-lib`, which the running services import.
 
 ## Quant Lab
 

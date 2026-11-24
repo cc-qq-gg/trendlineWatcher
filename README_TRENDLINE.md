@@ -51,18 +51,21 @@ quantauto/
 
 ## 快速开始
 
-### 1. 安装依赖
+环境以 `pyproject.toml` + `uv.lock` 为准，统一用 uv（不要用 pip / requirements.txt，
+那份缺 `requests`、`schedule`、`ta-lib`）。
+
+### 1. 同步依赖
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 2. 启动系统
 ```bash
-python run_trendline_monitor.py
+uv run run_trendline_monitor.py      # 趋势线 + A 股 /biga + 股票监控调度（5000）
 ```
 
 ### 3. 访问Web界面
-打开浏览器访问: http://localhost:5000
+打开浏览器访问: http://localhost:5000 · A 股页面: http://localhost:5000/biga/
 
 ### 4. 添加趋势线
 1. 点击"新增趋势线"

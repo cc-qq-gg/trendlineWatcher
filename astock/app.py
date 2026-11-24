@@ -1,6 +1,7 @@
 """A 股页面（指数关系 / 双动量轮动）：独立蓝图，挂在哪、带不带登录由调用方决定。
 
-- 本地：`python -m astock.app` → http://127.0.0.1:8012/biga/（和线上同一个路径，省得两边对不上）
+- 本地：`uv run --no-sync python -m astock.app` → http://127.0.0.1:8012/biga/
+  （和线上同一个路径，省得两边对不上）
 - 线上：TrendlineWebApp 调 `init_app(app, "/biga", require_login=True)`，与趋势线页面共用
   端口和登录 session，不再单独占一个端口
 
