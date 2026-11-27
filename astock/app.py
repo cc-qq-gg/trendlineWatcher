@@ -10,7 +10,8 @@
     GET  /biga/vendor/<name>  图表库（相对路径引用，蓝图自带，不依赖宿主 app）
     GET  /biga/api/meta       数据覆盖、序列清单、预设、刷新状态
     GET  /biga/api/relations  多条序列同轴（原始点位 / 滚动分位 / ERP）
-    GET  /biga/api/momentum   双动量轮动回测
+    GET  /biga/api/momentum   双动量轮动回测（A 股池）
+    GET  /biga/api/btc        BTC 双动量回测（BTC + 创业板指）
     POST /biga/api/refresh    后台增量采集（立刻返回，前端轮询 meta）
 
 数据自愈：GET 进来先看库在不在，缺了就后台起一次增量采集（同一进程只起一条），
@@ -200,6 +201,32 @@ def api_momentum():
         )
     except ValueError as exc:
         return _error(exc)
+    return _reply(result)
+
+
+@bp.get("/api/btc")
+def api_btc():
+    try:
+        args = _args()
+        # 区间优先级同 A 股：显式 start > years（最近 N 年）> BTC 样本起点。
+        start = args.get("start")
+        if start is None and "years" not in args:
+            start = service.BTC_DEFAULT_START
+        result = service.btc_view(
+            preset=args.get("preset", "top1"),
+            window=args.get("window"),
+            entry=args.get("entry"),
+            exit_threshold=args.get("exit_threshold"),
+            cost_rate=args.get("cost_rate"),
+            years=args.get("years"),
+            start=start,
+            detail=_flag("detail", True),
+        )
+    except ValueError as exc:
+        return _error(exc)
+    except FileNotFoundError as exc:
+        # 分钟线由 btc-strategy-worker 维护，还没落盘时先给 503，不要让页面白屏
+        return jsonify({"success": False, "message": f"BTC 分钟线还没就绪：{exc}"}), 503
     return _reply(result)
 
 

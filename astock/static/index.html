@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>A 股指数 · 关系与双动量轮动</title>
+<title>A 股指数 · 关系与双动量（A 股 / BTC）</title>
 <style>
   :root {
     --bg: #0d1117; --panel: #131a21; --line: #1f262e; --text: #c9d1d9;
@@ -174,7 +174,8 @@
   <h1>A 股指数</h1>
   <div class="tabs">
     <button id="tabRel" class="on">指数关系</button>
-    <button id="tabMom">双动量轮动</button>
+    <button id="tabMom">A 股双动量</button>
+    <button id="tabMomBtc">BTC 双动量</button>
   </div>
   <div class="meta" id="meta">加载中…</div>
   <div class="spacer"></div>
@@ -250,14 +251,45 @@ const el = (id) => document.getElementById(id);
 const visible = (id) => el(id).classList.contains('on');
 const COLORS = ['#58a6ff', '#f0883e', '#3fb950', '#db6d28', '#a371f7', '#e3b341', '#26a69a', '#ef5350'];
 const REL_RANGES = [['1 年', 1], ['3 年', 3], ['5 年', 5], ['10 年', 10], ['全部', 0]];
-const MOM_RANGES = [['1 年', 1], ['3 年', 3], ['5 年', 5], ['10 年', 10], ['全部', 0]];
-const SHORT = { 'sz.399006': '创业板指', '513100_PX': '纳指ETF', 'sh.000012': '国债指数' };
+// 两套轮动共用一个视图：接口、档位、预设、系列颜色都在这里配置，切换 tab 只换配置
+const MOM_VIEWS = {
+  ashare: {
+    label: 'A 股双动量',
+    api: 'api/momentum',
+    ranges: [['1 年', 1], ['3 年', 3], ['5 年', 5], ['10 年', 10], ['全部', 0]],
+    defaultYears: 10,
+    presets: () => S.meta?.presets || [],
+    defaultPreset: 'optimized',
+    series: [
+      ['STRATEGY', '策略', '#e3b341', 2.5],
+      ['sz.399006', '创业板指', '#58a6ff', 1.5],
+      ['513100_PX', '纳指ETF', '#3fb950', 1.5],
+      ['sh.000012', '国债指数', '#8b949e', 1.5],
+    ],
+  },
+  btc: {
+    label: 'BTC 双动量',
+    api: 'api/btc',
+    // BTC 现货从 2019 年开始，十年档与「全部」完全重合，所以只给四档
+    ranges: [['1 年', 1], ['3 年', 3], ['5 年', 5], ['全部', 0]],
+    defaultYears: 0,
+    presets: () => S.meta?.btc_presets || [],
+    defaultPreset: 'top1',
+    series: [
+      ['STRATEGY', '策略', '#e3b341', 2.5],
+      ['BTC', 'BTC', '#f0883e', 1.8],
+      ['sz.399006', '创业板指', '#58a6ff', 1.5],
+      ['sh.000012', '国债指数', '#8b949e', 1.5],
+    ],
+  },
+};
+const SHORT = { 'sz.399006': '创业板指', '513100_PX': '纳指ETF', 'sh.000012': '国债指数', BTC: 'BTC' };
 
 const S = {
   meta: null, codes: [], relYears: 10,
   rel: null, relChart: null, relSeries: {}, relColors: {},
   relAligned: null, relTip: false,
-  mom: null, momChart: null, momSeries: {}, momYears: 10, busy: false,
+  mom: {}, momTab: 'ashare', momChart: null, momSeries: {}, momYears: { ashare: 10, btc: 0 }, busy: false,
   // 同一份响应来回切档位不重复下载：键是参数串，值是整个响应体
   relCache: new Map(), momCache: new Map(),
 };
@@ -302,25 +334,68 @@ async function loadMeta() {
     : m.stale ? `<span class="badge warn">数据偏旧 ${m.age_days} 天</span>`
               : `<span class="badge ok">数据 ${m.latest}</span>`;
   el('meta').innerHTML = `${stale}<span class="only-wide"> · 成本单边 <b>${m.mom_cost_bp}</b>bp · 空仓持 <b>${SHORT[m.mom_bond] || m.mom_bond}</b></span>`;
-  el('momPreset').innerHTML = m.presets
+  // 只重置界面，不在这里拉数据：boot 会并行拉两个视图，重复请求只会白等
+  applyMomTab(S.momTab, { quiet: true });
+  return m;
+}
+
+function momView() {
+  return MOM_VIEWS[S.momTab];
+}
+
+function applyPreset(key) {
+  const p = momView().presets().find((item) => item.key === key);
+  if (!p) return;
+  el('momPreset').value = key;
+  el('momWindow').value = p.window;
+  el('momEntry').value = (p.entry * 100).toFixed(2);
+  el('momExit').value = (p.exit_threshold * 100).toFixed(2);
+}
+
+// 切 tab 只换配置：档位按钮、预设下拉、参数面板、图表都按当前视图重画
+function applyMomTab(tab, options = {}) {
+  S.momTab = MOM_VIEWS[tab] ? tab : 'ashare';
+  const view = momView();
+  const years = S.momYears[S.momTab];
+
+  el('momRanges').innerHTML = view.ranges
+    .map(([label, value]) => `<button data-years="${value}" class="${value === years ? 'on' : ''}">${label}<i class="rv"></i></button>`)
+    .join('');
+  el('momRanges').querySelectorAll('button').forEach((node) => {
+    node.onclick = () => {
+      S.momYears[S.momTab] = Number(node.dataset.years);
+      el('momRanges').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === node));
+      loadMomentum();
+    };
+  });
+
+  const presets = view.presets();
+  el('momPreset').innerHTML = presets
     .map((p) => {
       // 下拉只放名字，窗口/开仓/平仓塞 title 与「参数」面板，移动端不再被截断
       const detail = `${p.window}日 / ${(p.entry * 100).toFixed(2)}% / ${(p.exit_threshold * 100).toFixed(2)}%`;
       return `<option value="${p.key}" title="${detail}">${p.label}</option>`;
     })
     .join('');
-  applyPreset('optimized');
-  el('momNote').textContent = m.presets.find((p) => p.key === 'optimized').note;
-  return m;
-}
+  const pick = presets.find((p) => p.key === view.defaultPreset) || presets[0];
+  if (pick) applyPreset(pick.key);
+  el('momNote').textContent = pick ? pick.note : '';
 
-function applyPreset(key) {
-  const p = (S.meta.presets || []).find((item) => item.key === key);
-  if (!p) return;
-  el('momPreset').value = key;
-  el('momWindow').value = p.window;
-  el('momEntry').value = (p.entry * 100).toFixed(2);
-  el('momExit').value = (p.exit_threshold * 100).toFixed(2);
+  // 两个池子的净值序列完全不同，切 tab 必须先清掉旧图
+  if (S.momChart) {
+    Object.values(S.momSeries).forEach((line) => S.momChart.removeSeries(line));
+    S.momSeries = {};
+  }
+  el('momYearly').innerHTML = '';
+  el('momSens').innerHTML = '';
+  el('momCards').innerHTML = '';
+  el('momKpiHint').textContent = '';
+  el('momLegend').textContent = '—';
+
+  if (options.quiet) return;
+  const data = S.mom[S.momTab];
+  if (data) drawMomentum(data);
+  else loadMomentum();
 }
 
 /* ---------------- 指数关系 ---------------- */
@@ -658,7 +733,7 @@ function renderRelTable(data) {
     <tbody>${rows}</tbody></table>`;
 }
 
-/* ---------------- 双动量轮动 ---------------- */
+/* ---------------- 双动量（A 股 / BTC） ---------------- */
 
 function momChart() {
   if (S.momChart) return S.momChart;
@@ -682,6 +757,8 @@ async function loadMomentum() {
     const raw = el(id).value.trim();
     return raw === '' ? null : String(Number(raw) / scale);
   };
+  const tab = S.momTab;
+  const view = momView();
   const q = new URLSearchParams({ preset: el('momPreset').value });
   const win = input('momWindow');
   const entry = input('momEntry', 100);
@@ -690,26 +767,22 @@ async function loadMomentum() {
   if (entry !== null) q.set('entry', entry);
   if (exit !== null) q.set('exit_threshold', exit);
   // 只传 years，不传 start：后端把「最近 N 年」当区间；都不传即全历史
-  if (S.momYears) q.set('years', S.momYears);
+  if (S.momYears[tab]) q.set('years', S.momYears[tab]);
   const key = q.toString();
+  const cacheKey = tab + '|' + key;
   try {
     // 回测响应是全页面最重的一份，同一组参数重跑直接复用（默认全历史 600KB+）
-    const hit = cacheGet(S.momCache, key);
-    const data = hit || await getJSON('api/momentum?' + key);
-    if (!hit) cachePut(S.momCache, key, data, 3);
-    S.mom = data;
+    const hit = cacheGet(S.momCache, cacheKey);
+    const data = hit || await getJSON(view.api + '?' + key);
+    if (!hit) cachePut(S.momCache, cacheKey, data, 6);
+    S.mom[tab] = data;
+    if (tab !== S.momTab) return;            // 请求期间切了 tab：数据留着，别画错池子
     drawMomentum(data);
   } catch (err) {
+    if (tab !== S.momTab) return;
     el('momLegend').innerHTML = `<span style="color:#ef5350">${err.message}</span>`;
   }
 }
-
-const MOM_SERIES = [
-  ['STRATEGY', '策略', '#e3b341', 2.5],
-  ['sz.399006', '创业板指', '#58a6ff', 1.5],
-  ['513100_PX', '纳指ETF', '#3fb950', 1.5],
-  ['sh.000012', '国债指数', '#8b949e', 1.5],
-];
 
 function drawMomentum(data) {
   renderMomCards(data);
@@ -725,8 +798,9 @@ function drawMomentum(data) {
   Object.values(S.momSeries).forEach((line) => chart.removeSeries(line));
   S.momSeries = {};
 
+  const specs = momView().series;
   data.series.forEach((item) => {
-    const spec = MOM_SERIES.find((row) => row[0] === item.code);
+    const spec = specs.find((row) => row[0] === item.code);
     if (!spec) return;
     const line = chart.addSeries(LWC.LineSeries, {
       color: spec[2], lineWidth: spec[3], priceLineVisible: false, lastValueVisible: false,
@@ -743,10 +817,18 @@ function drawMomentum(data) {
   }, 1);
   dd.setData(data.drawdown.map((p) => ({ time: p.t / 1000, value: p.v })));
   S.momSeries.drawdown = dd;
-  chart.panes()[1]?.setStretchFactor(1);        // 净值:回撤 = 2:1，总高度不变
+  // 净值:回撤 = 5:1（原 2:1），回撤高度压到原来的 1/6≈一半。
+  // 切 tab 时 pane 会被销毁重建，刚 addSeries 出来的那一帧比例还没进布局，同帧设置会被
+  // 丢掉，所以下一帧再补一次，否则只有首次建图的那个池子生效。
+  const fitPanes = () => {
+    chart.panes()[0]?.setStretchFactor(2);
+    chart.panes()[1]?.setStretchFactor(0.4);
+  };
+  fitPanes();
+  requestAnimationFrame(fitPanes);
 
   chart.timeScale().fitContent();
-  el('momLegend').innerHTML = MOM_SERIES
+  el('momLegend').innerHTML = specs
     .map(([code, name, color]) => `<span style="color:${color}">${name}</span>`)
     .join(' · ') + ' · 下方面积＝策略回撤';
 }
@@ -845,18 +927,20 @@ function renderMomTable(id, head, rows, pctCols) {
 /* ---------------- 交互 ---------------- */
 
 function switchTab(which) {
-  el('viewRel').classList.toggle('on', which === 'rel');
-  el('viewMom').classList.toggle('on', which === 'mom');
-  el('tabRel').classList.toggle('on', which === 'rel');
-  el('tabMom').classList.toggle('on', which === 'mom');
+  const mom = which !== 'rel';
+  el('viewRel').classList.toggle('on', !mom);
+  el('viewMom').classList.toggle('on', mom);
+  el('tabRel').classList.toggle('on', !mom);
+  el('tabMom').classList.toggle('on', which === 'ashare');
+  el('tabMomBtc').classList.toggle('on', which === 'btc');
+  if (mom && S.momTab !== which) applyMomTab(which);
   // 隐藏期间容器尺寸为 0，切回来要让图表重新量一次
   requestAnimationFrame(() => {
-    if (which === 'rel') {
+    if (!mom) {
       if (!S.relChart && S.rel) drawRelations(S.rel);   // 隐藏时只填了表格，图在这里补建
       S.relChart?.timeScale().fitContent();
-    }
-    if (which === 'mom') {
-      if (!S.momChart && S.mom) drawMomentum(S.mom);
+    } else {
+      if (!S.momChart && S.mom[S.momTab]) drawMomentum(S.mom[S.momTab]);
       S.momChart?.timeScale().fitContent();
     }
   });
@@ -881,6 +965,7 @@ async function doRefresh() {
         // 数据换了，两层前端缓存（以及后端的 LRU）都过期，必须清掉再拉
         S.relCache.clear();
         S.momCache.clear();
+        S.mom = {};                           // 两个 tab 的旧响应都要丢，否则切过去还是旧数
         await loadMeta();
         await loadRelations();
         await loadMomentum();
@@ -897,7 +982,8 @@ async function doRefresh() {
 }
 
 el('tabRel').onclick = () => switchTab('rel');
-el('tabMom').onclick = () => switchTab('mom');
+el('tabMom').onclick = () => switchTab('ashare');
+el('tabMomBtc').onclick = () => switchTab('btc');
 el('btnRefresh').onclick = doRefresh;
 el('relTipOn').onchange = (ev) => {
   S.relTip = ev.target.checked;
@@ -906,17 +992,6 @@ el('relTipOn').onchange = (ev) => {
 };
 el('momPreset').onchange = (ev) => { applyPreset(ev.target.value); loadMomentum(); };
 el('momRun').onclick = loadMomentum;
-
-el('momRanges').innerHTML = MOM_RANGES
-  .map(([label, years]) => `<button data-years="${years}" class="${years === S.momYears ? 'on' : ''}">${label}<i class="rv"></i></button>`)
-  .join('');
-el('momRanges').querySelectorAll('button').forEach((node) => {
-  node.onclick = () => {
-    S.momYears = Number(node.dataset.years);
-    el('momRanges').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === node));
-    loadMomentum();
-  };
-});
 
 el('momYearly').addEventListener('click', (ev) => {
   const button = ev.target.closest('.yr-row');
@@ -932,7 +1007,7 @@ el('momYearly').addEventListener('click', (ev) => {
   if (!open) return;
   wrapper.classList.add('open');
   button.setAttribute('aria-expanded', 'true');
-  wrapper.insertAdjacentHTML('beforeend', ydetailHTML(S.mom, Number(button.dataset.year)));
+  wrapper.insertAdjacentHTML('beforeend', ydetailHTML(S.mom[S.momTab], Number(button.dataset.year)));
 });
 
 /* 首次部署时库里还没有 CSV（data/ 不入库），后端会在第一个 GET 上自愈起采集：

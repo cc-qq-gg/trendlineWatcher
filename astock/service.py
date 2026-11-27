@@ -15,15 +15,17 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import data, momentum, payload, relation
+from . import btcdata, data, momentum, payload, relation
 
 DEFAULT_YEARS = relation.PERCENTILE_YEARS
 DEFAULT_START = momentum.ALL_START
+BTC_DEFAULT_START = momentum.BTC_START
 
 STATE_CACHE = 4                     # 参数组合只有几十种，留 4 份够来回切（8 份在这个机器上白占几十 MB）
 _CLOSES: dict[str, pd.DataFrame] = {}
 _RELATION: OrderedDict[tuple, dict] = OrderedDict()
 _MOMENTUM: OrderedDict[tuple, dict] = OrderedDict()
+_BTC_FRAME: dict[tuple, tuple[tuple, pd.DataFrame]] = {}   # (指纹, BTC+A股宽表)
 
 _REFRESH = {"running": False, "started_at": None, "last": None, "error": None}
 _LOCK = threading.Lock()
@@ -69,9 +71,10 @@ def relations(codes: list[str] | None = None, start: str | None = None,
 
 # ---------------- 双动量轮动 ----------------
 
-def _resolve(preset: str, window, entry, exit_threshold, cost_rate) -> dict:
-    """预设打底，显式参数覆盖；两边都不给就用优化参数。"""
-    base = momentum.preset(preset)
+def _resolve(preset: str, window, entry, exit_threshold, cost_rate,
+             pool: momentum.Pool | None = None) -> dict:
+    """预设打底，显式参数覆盖；两边都不给就用该池的默认参数。"""
+    base = momentum.preset(preset, pool)
     params = {
         "window": base["window"] if window is None else int(window),
         "entry": base["entry"] if entry is None else float(entry),
@@ -111,7 +114,75 @@ def presets() -> list[dict]:
     return [{"key": name, **momentum.preset(name)} for name in momentum.PRESETS]
 
 
+# ---------------- BTC 双动量 ----------------
+
+def btc_closes_frame(path: str | Path | None = None) -> pd.DataFrame:
+    """BTC 日线 + A 股交易日的宽表，按两个源文件的 (mtime, size) 失效。
+
+    BTC 5 分钟线由 btc-strategy-worker 每 4 小时维护，新 K 线到盘就会让这份缓存重建；
+    重建本身是 831k 行的首次解析（约 2s），但 btcdata 已经把聚合结果落成 50KB 小文件。
+    """
+    root = _key(path)
+    source, cache = Path(btcdata.DEFAULT_SOURCE), Path(btcdata.DEFAULT_CACHE)
+    src, index = source.stat(), Path(root).stat()
+    stamp = (src.st_mtime_ns, src.st_size, index.st_mtime_ns, index.st_size)
+    key = (root, str(source), str(cache))
+    hit = _BTC_FRAME.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    ashare = data.load_closes(
+        [code for code in momentum.BTC_POOL if code != btcdata.BTC_CODE] + [momentum.BTC_BOND], root)
+    frame = btcdata.btc_closes(ashare, source, cache)
+    _BTC_FRAME[key] = (stamp, frame)
+    return frame
+
+
+def btc_view(preset: str = "top1", window: int | None = None, entry: float | None = None,
+             exit_threshold: float | None = None, cost_rate: float | None = None,
+             years: float | None = None, start: str | None = None,
+             detail: bool = True, path: str | Path | None = None) -> dict:
+    """BTC 双动量回测（池 = BTC 现货 + 创业板指，空仓持国债指数）。"""
+    pc = momentum.BTC
+    params = _resolve(preset, window, entry, exit_threshold, cost_rate, pc)
+    root = _key(path)
+    key = ("btc", root, preset, params["window"], params["entry"], params["exit_threshold"],
+           params["cost_rate"], years, start, bool(detail))
+    if key in _MOMENTUM:
+        _MOMENTUM.move_to_end(key)
+        return _MOMENTUM[key]
+    started = time.perf_counter()
+    frame = btc_closes_frame(path)
+    result = momentum.run(frame, years=years, start_date=start, detail=bool(detail), pool=pc, **params)
+    result["spans"] = payload.round_numbers(momentum.spans(
+        frame[pc.all_codes].to_numpy(dtype=float), frame.index, pool=pc, **params))
+    result["meta"]["preset"] = preset
+    result["meta"]["label"] = momentum.preset(preset, pc)["label"]
+    result["meta"]["elapsed_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
+    return _remember(_MOMENTUM, key, result)
+
+
+def btc_presets() -> list[dict]:
+    """BTC 的三个宽网格预设（总收益前三），前端下拉框直接用。"""
+    return [{"key": name, **momentum.preset(name, momentum.BTC)} for name in momentum.BTC_PRESETS]
+
+
 # ---------------- 概览与刷新 ----------------
+
+def btc_coverage() -> dict:
+    """BTC 日线覆盖（未 join）：分钟线还没同步时给 missing=True，页面照常渲染。"""
+    try:
+        # 显式传路径：默认参数在 def 时就绑定了，指向模块属性才能被测试/部署改写
+        daily = btcdata.load_btc_daily(btcdata.DEFAULT_SOURCE, btcdata.DEFAULT_CACHE)
+    except (OSError, ValueError):
+        return {"rows": 0, "start": None, "end": None, "missing": True}
+    return {
+        "rows": len(daily),
+        "start": daily.index[0].strftime("%Y-%m-%d"),
+        "end": daily.index[-1].strftime("%Y-%m-%d"),
+        "cutoff_utc": f"{btcdata.CUTOFF_MINUTES // 60:02d}:{btcdata.CUTOFF_MINUTES % 60:02d}",
+        "missing": False,
+    }
+
 
 def meta(path: str | Path | None = None) -> dict:
     """页面头部：数据覆盖、序列清单、默认参数、刷新状态。"""
@@ -135,6 +206,14 @@ def meta(path: str | Path | None = None) -> dict:
         "mom_default": {"window": momentum.WINDOW, "entry": momentum.ENTRY,
                         "exit_threshold": momentum.EXIT},
         "presets": presets(),
+        "btc_pool": list(momentum.BTC_POOL),
+        "btc_bond": momentum.BTC_BOND,
+        "btc_start": momentum.BTC_START,
+        "btc_spans": list(momentum.BTC_SPAN_YEARS),
+        "btc_default": {"window": momentum.BTC_WINDOW, "entry": momentum.BTC_ENTRY,
+                        "exit_threshold": momentum.BTC_EXIT},
+        "btc_presets": btc_presets(),
+        "btc_coverage": btc_coverage(),
         "relation_years": relation.PERCENTILE_YEARS,
         # 关系图默认勾选的三条，前端照这个清单点亮 chip，不要在 JS 里再抄一份
         "relation_default_codes": list(relation.DEFAULT_CODES),
