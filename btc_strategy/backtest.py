@@ -552,9 +552,28 @@ def build_payload(
         model_config = replace(config, risk_off_leverage=risk_off, risk_on_leverage=risk_on)
         result = run_backtest(features, model_config, use_regime=use_regime, regime_mode=regime_mode)
         datasets[key] = strategy_payload(key, label, description, result, model_config)
+    return compact_payload(datasets)
+
+
+# 4 档策略的 time/OHLC/MA 完全一致：只留一份列式 bars，各档仅存策略相关列，
+# 未压缩从 16MB 降到 ~4MB（gzip 后约 0.9MB）；前端 expandPayload 负责还原成对象数组
+BAR_SHARED_FIELDS = ("time", "open", "high", "low", "close", "ma", "maRef", "signal", "ma200d")
+BAR_STRATEGY_FIELDS = ("pos", "leverage", "regimeState", "equity", "drawdown")
+
+
+def compact_payload(datasets: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    first = datasets[next(iter(datasets))]["bars"]
+    shared_bars = [[row[field] for field in BAR_SHARED_FIELDS] for row in first]
+    for dataset in datasets.values():
+        dataset["bars"] = [
+            [row[field] for field in BAR_STRATEGY_FIELDS] for row in dataset["bars"]
+        ]
     return {
         "default": "baseline",
-        "schema": "btc-strategy-next-open-v1",
+        "schema": "btc-strategy-next-open-v2",
+        "barFields": list(BAR_SHARED_FIELDS),
+        "strategyFields": list(BAR_STRATEGY_FIELDS),
+        "bars": shared_bars,
         "datasets": datasets,
     }
 

@@ -5,6 +5,7 @@
 
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_from_directory, abort
 import json
+import gzip
 import uuid
 import hashlib
 import time
@@ -1868,8 +1869,35 @@ def btc_strategy_payload():
     path = os.path.join('data', 'btc_strategy', 'backtests', 'latest_payload.json')
     if not os.path.exists(path):
         return jsonify({'success': False, 'message': 'BTC backtest payload unavailable'}), 503
-    with open(path, 'r', encoding='utf-8') as handle:
-        return app.response_class(handle.read(), mimetype='application/json')
+    stat = os.stat(path)
+    etag = f'W/"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    headers = {'ETag': etag, 'Vary': 'Accept-Encoding', 'Cache-Control': 'private, no-cache'}
+    # 文件未变时只回 304，避免浏览器每次重下 16MB
+    if request.headers.get('If-None-Match') == etag:
+        return app.response_class(status=304, headers=headers)
+    if 'gzip' in request.headers.get('Accept-Encoding', '').lower():
+        response = app.response_class(_btc_payload_gzip(path), mimetype='application/json')
+        response.headers['Content-Encoding'] = 'gzip'
+    else:
+        with open(path, 'rb') as handle:
+            response = app.response_class(handle.read(), mimetype='application/json')
+    response.headers.update(headers)
+    return response
+
+
+# payload 16MB，gzip 后约 2.9MB；按 (mtime, size) 缓存压缩结果，worker 重写后自动失效
+_BTC_PAYLOAD_GZIP_CACHE = {'stamp': None, 'body': b''}
+
+
+def _btc_payload_gzip(path):
+    stat = os.stat(path)
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    if _BTC_PAYLOAD_GZIP_CACHE['stamp'] != stamp:
+        with open(path, 'rb') as handle:
+            raw = handle.read()
+        _BTC_PAYLOAD_GZIP_CACHE['stamp'] = stamp
+        _BTC_PAYLOAD_GZIP_CACHE['body'] = gzip.compress(raw, 6)
+    return _BTC_PAYLOAD_GZIP_CACHE['body']
 
 
 # A 股页面挂在同一端口、同一套登录 session 下：/biga（库缺失时页面自己触发补数，
