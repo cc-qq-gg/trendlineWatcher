@@ -21,13 +21,16 @@
     select, button { height: 34px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 6px; padding: 0 10px; font-size: 13px; }
     #strategyFilter { min-width: 230px; }
     button { cursor: pointer; }
-    /* 顶部四档区间收益：纯展示，格子不是按钮，切换策略时重算 */
-    .spanBar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); background: #13161b; }
-    .spanCell { min-width: 0; padding: 8px 16px; border-left: 1px solid var(--line); }
+    /* 顶部四档区间收益：分段按钮，点选后缩放图表并过滤逐笔交易，切换策略时重算 */
+    .spanBar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); flex: 0 0 auto; margin: 8px 16px 0; max-width: 720px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+    /* 覆盖全局 button 的 34px 固定高，否则两行内容会被裁 */
+    .spanCell { min-width: 0; height: auto; padding: 7px 10px 8px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); font: inherit; text-align: center; cursor: pointer; }
     .spanCell:first-child { border-left: 0; }
-    .spanCell span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .4px; }
+    .spanCell:hover { background: #1b2027; }
+    .spanCell.active { background: #27303b; color: var(--text); }
+    .spanCell span { display: block; color: inherit; opacity: .8; font-size: 11px; letter-spacing: .4px; }
     /* 四格固定一行：数字不换行，窄屏字号随视口收缩 */
-    .spanCell strong { display: block; margin-top: 3px; font-size: 17px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
+    .spanCell strong { display: block; margin-top: 3px; font-size: 16px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
     main { display: grid; grid-template-columns: minmax(0, 1fr) 390px; flex: 1 1 0; min-height: 0; }
     .charts { min-width: 0; padding: 12px; display: grid; grid-template-rows: 50% 50%; gap: 10px; }
     .chartBlock { min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; position: relative; display: grid; grid-template-rows: 28px minmax(0, 1fr); }
@@ -67,6 +70,7 @@
       header { grid-template-columns: 1fr; }
       .controls { justify-content: flex-start; }
       main { grid-template-columns: 1fr; flex: 0 0 auto; min-height: 0; height: auto; }
+      .spanBar { margin: 6px 8px 0; max-width: none; }
       .spanCell { padding: 6px 8px; }
       .spanCell span { font-size: 10px; }
       .spanCell strong { font-size: clamp(11px, 3.4vw, 15px); }
@@ -85,6 +89,7 @@
       <label>策略<select id="strategyFilter"></select></label>
       <label>年份<select id="yearFilter"></select></label>
       <label>类型<select id="typeFilter"><option value="all">全部</option><option value="win">盈利</option><option value="loss">亏损</option><option value="topWin">Top盈利</option><option value="topLoss">Top亏损</option></select></label>
+      <label>周期<select id="timeframeFilter"><option value="4h">4h</option><option value="1d">日</option><option value="1w">周</option></select></label>
       <button id="fitButton">全图</button>
     </div>
   </header>
@@ -92,7 +97,7 @@
   <main>
     <section class="charts">
       <div class="chartBlock">
-        <div class="chartTitle"><span>BTC 4h K线 + MA11 / MA200D</span><span id="selectedTradeTitle">未选择交易</span></div>
+        <div class="chartTitle"><span id="priceChartTitle">BTC 4h K线 + MA11 / MA200D</span><span id="selectedTradeTitle">未选择交易</span></div>
         <div class="chartHost" id="priceChart"></div>
         <div class="chartTooltip hidden" id="priceTooltip"></div>
       </div>
@@ -123,6 +128,7 @@
     let DATA = PAYLOAD.datasets[PAYLOAD.default];
     const appState = {
       charts: [], chartMeta: new Map(), activeTradeId: null, activeYear: 'all',
+      activeSpan: 'all', timeframe: '1d', viewCache: null,
       rangeSync: { owner: null, frame: null, releaseFrame: null, applying: false, range: null, logicalRange: null },
       crosshairSync: { owner: null, frame: null, releaseFrame: null, applying: false, pending: null }
     };
@@ -140,7 +146,7 @@
         layout: { background: { color: colors.bg }, textColor: colors.text },
         grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
         rightPriceScale: { borderColor: '#303743' },
-        timeScale: { borderColor: '#303743', timeVisible: true, secondsVisible: false, rightOffset: 8, barSpacing: 8, lockVisibleTimeRangeOnResize: true },
+        timeScale: { borderColor: '#303743', timeVisible: appState.timeframe === '4h', secondsVisible: false, rightOffset: 8, barSpacing: 8, lockVisibleTimeRangeOnResize: true },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
         localization: { locale: 'zh-CN' }
       };
@@ -181,15 +187,19 @@
         });
       });
     }
-    function rowForTime(time) { return DATA.bars.find(row => row.time === time) || null; }
+    function rowForTime(time) { return viewBars().find(row => row.time === time) || null; }
     function nearestRow(time, key) {
       const exact = rowForTime(time);
       if (exact && Number.isFinite(exact[key])) return exact;
-      return DATA.bars.filter(row => Number.isFinite(row[key])).reduce((best, row) => !best || Math.abs(row.time - time) < Math.abs(best.time - time) ? row : best, null);
+      return viewBars().filter(row => Number.isFinite(row[key])).reduce((best, row) => !best || Math.abs(row.time - time) < Math.abs(best.time - time) ? row : best, null);
     }
     function numberText(value, digits = 2) { return Number.isFinite(value) ? Number(value).toFixed(digits) : '-'; }
     function pctText(value) { return Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : '-'; }
-    function timeText(time) { return new Date(time * 1000).toLocaleString('zh-CN', { hour12: false }); }
+    function timeText(time) {
+      const date = new Date(time * 1000);
+      // 日/周 桶按 UTC 切，展示也用 UTC 日期，避免日线显示成本地 08:00
+      return appState.timeframe === '4h' ? date.toLocaleString('zh-CN', { hour12: false }) : date.toLocaleDateString('zh-CN', { timeZone: 'UTC' });
+    }
     function regimeText(value) {
       if (value > 0) return 'risk-on';
       if (value < 0) return 'risk-off';
@@ -198,7 +208,13 @@
     function tooltipFor(chartId, time) {
       const row = rowForTime(time) || nearestRow(time, chartId === 'equityChart' ? 'equity' : 'close');
       if (!row) return '';
-      if (chartId === 'priceChart') return `${timeText(row.time)}　开 ${numberText(row.open)}　高 ${numberText(row.high)}　低 ${numberText(row.low)}　收 ${numberText(row.close)}<br>MA11 ${numberText(row.ma)}　MA200D ${numberText(row.ma200d)}　杠杆 ${numberText(row.leverage, 2)}　${regimeText(row.regimeState)}`;
+      if (chartId === 'priceChart') {
+        const ohlc = `${timeText(row.time)}　开 ${numberText(row.open)}　高 ${numberText(row.high)}　低 ${numberText(row.low)}　收 ${numberText(row.close)}`;
+        // 日/周视图的 MA 是 4h 均线采样值，直接展示会误导，只标当前周期
+        if (appState.timeframe === '4h') return `${ohlc}<br>MA11 ${numberText(row.ma)}　MA200D ${numberText(row.ma200d)}　杠杆 ${numberText(row.leverage, 2)}　${regimeText(row.regimeState)}`;
+        const period = appState.timeframe === '1d' ? '日K' : '周K';
+        return `${ohlc}<br>${period}　杠杆 ${numberText(row.leverage, 2)}　${regimeText(row.regimeState)}`;
+      }
       return `${timeText(row.time)}　净值 ${numberText(row.equity, 4)}　回撤 ${pctText(row.drawdown)}`;
     }
     function updateChartTooltips(time) {
@@ -251,6 +267,57 @@
         });
       });
     }
+    // 周期视图：payload 只有 4h，日/周在前端聚合；桶按 UTC 切，周桶从周一起
+    const DAY_SECONDS = 86400;
+    function utcDayStart(time) { return Math.floor(time / DAY_SECONDS) * DAY_SECONDS; }
+    function utcWeekStart(time) {
+      const day = (new Date(time * 1000).getUTCDay() + 6) % 7; // 周一=0
+      return utcDayStart(time - day * DAY_SECONDS);
+    }
+    function bucketTime(time) {
+      if (appState.timeframe === '1d') return utcDayStart(time);
+      if (appState.timeframe === '1w') return utcWeekStart(time);
+      return time;
+    }
+    // 聚合字段：OHLC 首尾/极值，equity 取桶末（净值连续），其余指标取桶末采样
+    function aggregateBars(bars, timeframe) {
+      if (timeframe === '4h') return bars;
+      const bucketOf = timeframe === '1d' ? utcDayStart : utcWeekStart;
+      const out = [];
+      let current = null;
+      for (const row of bars) {
+        const bucket = bucketOf(row.time);
+        if (!current || current.time !== bucket) {
+          current = { time: bucket, open: row.open, high: row.high, low: row.low, close: row.close, ma: row.ma, ma200d: row.ma200d, leverage: row.leverage, regimeState: row.regimeState, equity: row.equity, drawdown: 0 };
+          out.push(current);
+        } else {
+          current.high = Math.max(current.high, row.high);
+          current.low = Math.min(current.low, row.low);
+          current.close = row.close;
+          current.ma = row.ma;
+          current.ma200d = row.ma200d;
+          current.leverage = row.leverage;
+          current.regimeState = row.regimeState;
+          current.equity = row.equity;
+        }
+      }
+      // 回撤按聚合后的净值重新累计，否则只看桶末会把回撤「抹浅」
+      let peak = -Infinity;
+      out.forEach(bar => {
+        peak = Math.max(peak, bar.equity);
+        bar.drawdown = peak > 0 ? bar.equity / peak - 1 : 0;
+      });
+      return out;
+    }
+    // 聚合结果按 dataset + 周期缓存，悬停/绘制/统计都复用
+    function viewBars() {
+      const cache = appState.viewCache;
+      const key = `${DATA.key}|${DATA.bars.length}|${appState.timeframe}`;
+      if (cache && cache.key === key) return cache.bars;
+      const bars = aggregateBars(DATA.bars, appState.timeframe);
+      appState.viewCache = { key, bars };
+      return bars;
+    }
     function candleData(rows) { return rows.map(row => ({ time: row.time, open: row.open, high: row.high, low: row.low, close: row.close })); }
     function lineData(rows, key) { return rows.filter(row => row[key] !== null && row[key] !== undefined).map(row => ({ time: row.time, value: row[key] })); }
     function displayTrades() {
@@ -259,9 +326,10 @@
     function tradeMarkers(trades) {
       const markers = [];
       trades.forEach(trade => {
-        markers.push({ time: trade.entryTime, position: 'belowBar', color: colors.long, shape: 'arrowUp', text: `L${trade.id}`, size: trade.id === appState.activeTradeId ? 2 : 1.15 });
+        // marker time 必须落在 series 数据点上，日/周视图要吸附到所属桶
+        markers.push({ time: bucketTime(trade.entryTime), position: 'belowBar', color: colors.long, shape: 'arrowUp', text: `L${trade.id}`, size: trade.id === appState.activeTradeId ? 2 : 1.15 });
         if (!trade.isOpen) {
-          markers.push({ time: trade.exitTime, position: 'aboveBar', color: trade.return >= 0 ? colors.long : colors.short, shape: 'arrowDown', text: trade.return >= 0 ? '赢' : '损', size: trade.id === appState.activeTradeId ? 2 : 1.15 });
+          markers.push({ time: bucketTime(trade.exitTime), position: 'aboveBar', color: trade.return >= 0 ? colors.long : colors.short, shape: 'arrowDown', text: trade.return >= 0 ? '赢' : '损', size: trade.id === appState.activeTradeId ? 2 : 1.15 });
         }
       });
       return markers;
@@ -276,7 +344,9 @@
     function filteredTrades() {
       const year = activeYear();
       const type = document.getElementById('typeFilter').value;
+      const span = spanWindow();
       let rows = displayTrades();
+      if (span) rows = rows.filter(trade => trade.entryTime >= span.from && trade.entryTime <= span.to);
       if (year !== 'all') rows = rows.filter(trade => String(trade.year) === year);
       if (type === 'win') rows = rows.filter(trade => trade.isWin);
       if (type === 'loss') rows = rows.filter(trade => !trade.isWin);
@@ -287,21 +357,31 @@
     // 表格默认只列最近 N 笔；选定年份或收益类型后给该范围内的全量
     function visibleTrades() {
       const rows = filteredTrades();
-      if (activeYear() !== 'all' || document.getElementById('typeFilter').value !== 'all') return rows;
+      if (activeYear() !== 'all' || appState.activeSpan !== 'all' || document.getElementById('typeFilter').value !== 'all') return rows;
       return rows.slice(-RECENT_TRADE_LIMIT);
     }
+    // 价格图标题跟随周期，日/周视图没有 4h 均线
+    function priceTitleText() {
+      if (appState.timeframe === '1d') return 'BTC 日K（4h 聚合）';
+      if (appState.timeframe === '1w') return 'BTC 周K（4h 聚合）';
+      return 'BTC 4h K线 + MA11 / MA200D';
+    }
     function setSeriesData() {
-      priceSeries.setData(candleData(DATA.bars));
+      const bars = viewBars();
+      priceSeries.setData(candleData(bars));
+      document.getElementById('priceChartTitle').textContent = priceTitleText();
       setTradeMarkers();
-      maSeries.setData(lineData(DATA.bars, 'ma'));
-      ma200Series.setData(lineData(DATA.bars, 'ma200d'));
-      equitySeries.setData(lineData(DATA.bars, 'equity'));
-      drawdownSeries.setData(lineData(DATA.bars, 'drawdown'));
+      // 日/周视图隐藏 4h 均线（采样值会误导），4h 恢复
+      const showMa = appState.timeframe === '4h';
+      maSeries.setData(showMa ? lineData(bars, 'ma') : []);
+      ma200Series.setData(showMa ? lineData(bars, 'ma200d') : []);
+      equitySeries.setData(lineData(bars, 'equity'));
+      drawdownSeries.setData(lineData(bars, 'drawdown'));
     }
     // 回撤副图纵轴：0 贴顶，底部覆盖到本策略最深回撤
     function drawdownRange() {
       let min = 0;
-      (DATA.bars || []).forEach(row => { if (Number.isFinite(row.drawdown) && row.drawdown < min) min = row.drawdown; });
+      viewBars().forEach(row => { if (Number.isFinite(row.drawdown) && row.drawdown < min) min = row.drawdown; });
       return { minValue: min < 0 ? min * 1.08 : -0.05, maxValue: 0 };
     }
     // 副图统计：Calmar 与调仓次数都从 bars 现算；调仓＝杠杆目标变化的根数，
@@ -382,14 +462,24 @@
       }
       setSeriesData();
       appState.chartMeta.forEach(meta => { syncVisibleRange(meta.chart); syncCrosshair(meta.chart); });
-      priceChart.timeScale().fitContent();
-      const range = priceChart.timeScale().getVisibleRange();
-      if (range) appState.charts.forEach(chart => chart.timeScale().setVisibleRange(range));
+      // setVisibleRange/fitContent 是排队到下一帧生效的，这里不要再“读旧 range 再回写”，
+      // 否则会把刚排队的 fitContent 覆盖成默认的几十根；区间由 applySpanRange 统一处理
+      applySpanRange();
       scheduleDdHead();
     }
-    // 顶部四档区间收益：只读展示，不参与图表与筛选。起点净值取区间首根之前那根，
+    // 顶部四档区间：按钮切换图表可视范围与逐笔表时间窗。起点净值取区间首根之前那根，
     // 与 annual_rows 的年起点口径一致，避免把首根自身的涨跌算进区间。
-    const SPAN_YEARS = [['1年', 1], ['3年', 3], ['5年', 5], ['全部', 0]];
+    const SPANS = [['y1', '1年', 1], ['y3', '3年', 3], ['y5', '5年', 5], ['all', '全部', 0]];
+    function currentSpan(key = appState.activeSpan) {
+      return SPANS.find(item => item[0] === key) || SPANS[SPANS.length - 1];
+    }
+    function spanWindow() {
+      const span = currentSpan();
+      const bars = DATA.bars;
+      if (!bars || !bars.length || span[2] === 0) return null;
+      const to = bars[bars.length - 1].time;
+      return { from: spanStartTime(to, span[2]), to };
+    }
     function spanStartTime(endTime, years) {
       const date = new Date(endTime * 1000);
       const target = new Date(date.getTime());
@@ -420,11 +510,66 @@
       return `${pct >= 0 ? '+' : ''}${body}%`;
     }
     function renderSpans() {
-      document.getElementById('spanBar').innerHTML = SPAN_YEARS.map(([label, years]) => {
+      const active = appState.activeSpan;
+      document.getElementById('spanBar').innerHTML = SPANS.map(([key, label, years]) => {
         const total = spanReturn(DATA.bars, years);
         const cls = !Number.isFinite(total) ? 'muted' : (total >= 0 ? 'long' : 'short');
-        return `<div class="spanCell"><span>${label}</span><strong class="${cls}">${spanText(total)}</strong></div>`;
+        const on = key === active ? ' active' : '';
+        return `<button type="button" class="spanCell${on}" data-span="${key}" aria-pressed="${key === active}"><span>${label}</span><strong class="${cls}">${spanText(total)}</strong></button>`;
       }).join('');
+    }
+    // 两图统一设区间：清掉排队的联动帧，避免 logicalRange 互相同步产生错位
+    function setBothVisibleRange(range) {
+      const sync = appState.rangeSync;
+      if (sync.frame) { cancelAnimationFrame(sync.frame); sync.frame = null; }
+      if (sync.releaseFrame) { cancelAnimationFrame(sync.releaseFrame); sync.releaseFrame = null; }
+      sync.applying = true;
+      appState.charts.forEach(chart => chart.timeScale().setVisibleRange(range));
+      requestAnimationFrame(() => { sync.applying = false; sync.owner = null; sync.range = null; sync.logicalRange = null; });
+    }
+    function applySpanRange() {
+      const span = currentSpan();
+      const bars = viewBars();
+      if (!bars.length) return;
+      if (span[2] === 0) {
+        appState.charts.forEach(chart => chart.timeScale().fitContent());
+        return;
+      }
+      const to = bars[bars.length - 1].time;
+      setBothVisibleRange({ from: spanStartTime(to, span[2]), to });
+    }
+    function selectSpan(key) {
+      const span = currentSpan(key);
+      appState.activeSpan = span[0];
+      // 区间与年份是两个时间维度：选任意区间（含「全部」）都把年份退回全部，避免叠加出空表
+      if (activeYear() !== 'all') {
+        appState.activeYear = 'all';
+        document.getElementById('yearFilter').value = 'all';
+        renderAnnual();
+      }
+      // 5年及以上自动升到日线；手动选择不会被自动降回 4h
+      if ((span[2] === 0 || span[2] >= 5) && appState.timeframe === '4h') switchTimeframe('1d');
+      renderSpans();
+      applySpanRange();
+      renderTrades();
+    }
+    function applyTimeScaleOptions() {
+      const timeVisible = appState.timeframe === '4h';
+      appState.charts.forEach(chart => chart.applyOptions({ timeScale: { timeVisible } }));
+    }
+    // 切周期：记下当前时间范围 → 重建两图数据 → 按时间恢复范围（不用逻辑索引，防粒度错位）
+    function switchTimeframe(tf) {
+      const select = document.getElementById('timeframeFilter');
+      if (tf === appState.timeframe) { select.value = tf; return; }
+      const range = appState.charts[0] ? appState.charts[0].timeScale().getVisibleRange() : null;
+      appState.timeframe = tf;
+      select.value = tf;
+      applyTimeScaleOptions();
+      setSeriesData();
+      if (range) setBothVisibleRange(range);
+      else appState.charts.forEach(chart => chart.timeScale().fitContent());
+      clearCrosshairAndTooltips();
+      scheduleDdHead();
     }
     function renderStats() {
       const meta = DATA.meta;
@@ -457,6 +602,11 @@
       const next = String(year);
       appState.activeYear = [...select.options].some(item => item.value === next) ? next : 'all';
       select.value = appState.activeYear;
+      // 年份是另一个时间维度：选具体年份时把区间退回「全部」，否则两个窗口叠加可能压成空表
+      if (appState.activeYear !== 'all' && appState.activeSpan !== 'all') {
+        appState.activeSpan = 'all';
+        renderSpans();
+      }
       renderAnnual();
       renderTrades();
     }
@@ -498,7 +648,7 @@
       renderTradeDetail(trade);
       setTradeMarkers();
       renderTrades();
-      const padding = 7 * 24 * 60 * 60;
+      const padding = (appState.timeframe === '1w' ? 21 : 7) * 24 * 60 * 60;
       const endTime = trade.isOpen ? trade.markTime : trade.exitTime;
       appState.charts.forEach(chart => chart.timeScale().setVisibleRange({ from: trade.entryTime - padding, to: endTime + padding }));
     }
@@ -512,6 +662,7 @@
     }
     function switchStrategy(key) {
       DATA = PAYLOAD.datasets[key];
+      appState.viewCache = null;
       appState.activeTradeId = null;
       document.getElementById('selectedTradeTitle').textContent = '未选择交易';
       renderTradeDetail(null);
@@ -523,7 +674,7 @@
       renderTrades();
       setSeriesData();
       clearCrosshairAndTooltips();
-      appState.charts.forEach(chart => chart.timeScale().fitContent());
+      applySpanRange();
     }
     function setupFilters() {
       const strategySelect = document.getElementById('strategyFilter');
@@ -533,7 +684,15 @@
       populateYears();
       document.getElementById('yearFilter').addEventListener('change', (event) => selectYear(event.target.value));
       document.getElementById('typeFilter').addEventListener('change', renderTrades);
-      document.getElementById('fitButton').addEventListener('click', () => appState.charts.forEach(chart => chart.timeScale().fitContent()));
+      document.getElementById('spanBar').addEventListener('click', (event) => {
+        const cell = event.target.closest('.spanCell');
+        if (cell && cell.dataset.span) selectSpan(cell.dataset.span);
+      });
+      const timeframeSelect = document.getElementById('timeframeFilter');
+      timeframeSelect.value = appState.timeframe;
+      timeframeSelect.addEventListener('change', () => switchTimeframe(timeframeSelect.value));
+      // 全图 = 回到「全部」档，避免按钮高亮与实际范围不一致
+      document.getElementById('fitButton').addEventListener('click', () => selectSpan('all'));
     }
     function resizeCharts() {
       appState.chartMeta.forEach((meta, id) => {
