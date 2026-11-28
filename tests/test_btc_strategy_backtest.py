@@ -1,6 +1,7 @@
+import numpy as np
 import pandas as pd
 
-from btc_strategy.backtest import complete_4h, run_backtest
+from btc_strategy.backtest import build_payload, complete_4h, run_backtest
 from btc_strategy.config import AGGRESSIVE
 
 
@@ -78,3 +79,48 @@ def test_complete_4h_drops_partial_bucket():
     output = complete_4h(raw)
     assert len(output) == 1
     assert output.iloc[0]["candle_begin_time"] == pd.Timestamp("2026-01-01", tz="UTC")
+
+
+def write_5m_csv(path, days=320):
+    """合成一段正弦行情：4H 上 MA11 会反复上穿/下穿，保证每档真的产生持仓。"""
+    step = np.arange(days * 288)
+    close = 100.0 * (1.0 + 0.25 * np.sin(step / 288.0))
+    frame = pd.DataFrame(
+        {
+            "candle_begin_time": pd.date_range("2020-01-01", periods=len(step), freq="5min", tz="UTC"),
+            "open": close,
+            "high": close * 1.002,
+            "low": close * 0.998,
+            "close": close,
+            "volume": 1.0,
+        }
+    )
+    frame.to_csv(path, index=False)
+    return path
+
+
+def test_payload_ships_fixed_one_before_baseline(tmp_path):
+    payload = build_payload(write_5m_csv(tmp_path / "5m.csv"))
+
+    assert list(payload["datasets"]) == ["fixed1", "baseline", "defensive", "growth", "aggressive"]
+    assert payload["default"] == "baseline"
+    assert payload["datasets"]["fixed1"]["meta"]["description"] == "固定 1.0x / stop 8%"
+
+
+def strategy_column(payload, key, field):
+    index = payload["strategyFields"].index(field)
+    return [row[index] for row in payload["datasets"][key]["bars"]]
+
+
+def test_fixed_one_is_same_signal_at_unit_leverage(tmp_path):
+    payload = build_payload(write_5m_csv(tmp_path / "5m.csv"))
+
+    fixed_lev = strategy_column(payload, "fixed1", "leverage")
+    base_lev = strategy_column(payload, "baseline", "leverage")
+    assert set(fixed_lev) == {0.0, 1.0}          # 有仓恒 1x，空仓 0
+    assert set(base_lev) == {0.0, 2.2}           # 对照组仍是固定 2.2x
+    # 择时来源相同（都不做 MA200 择时），但止损按含杠杆的权益回报判定，
+    # 2.2x 会更早打到 -8%，所以持仓序列允许分叉，这里只校验来源与杠杆口径。
+    assert set(strategy_column(payload, "fixed1", "regimeState")) == {0}
+    assert set(strategy_column(payload, "baseline", "regimeState")) == {0}
+    assert strategy_column(payload, "fixed1", "equity") != strategy_column(payload, "baseline", "equity")

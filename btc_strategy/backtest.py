@@ -12,7 +12,6 @@ import pandas as pd
 from btc_strategy.config import StrategyConfig
 from btc_strategy.data import load_csv, normalize_ohlcv
 
-
 COST_RATE = 5 / 10_000 + 1 / 1_000
 FUNDING_RATE_PER_8H = 1 / 10_000
 MIN_MARGIN_RATIO = 1 / 100
@@ -372,7 +371,7 @@ def calculate_metrics(
     return {
         "final_equity": float(equity[-1]),
         "max_drawdown": float((equity / np.maximum.accumulate(equity) - 1).min()),
-        "trade_count": int(len(returns)),
+        "trade_count": len(returns),
         "open_position_count": int(open_position is not None),
         "win_rate": float((returns > 0).mean()) if len(returns) else 0.0,
         "profit_loss_ratio": float(wins.sum() / gross_loss) if gross_loss else 0.0,
@@ -541,15 +540,29 @@ def build_payload(
 ) -> dict[str, Any]:
     config = StrategyConfig(name="BTC 4H")
     features = add_features(complete_4h(load_csv(data_path), observed_at), config)
+    # (key, label, description, use_regime, regime_mode, base_leverage, risk_off, risk_on)
+    # base_leverage 必须单独给：use_regime=False 的档位在 lagged_targets 里只认 base_leverage，
+    # 只改 risk_off/risk_on 不会生效，加出来的固定档会和 baseline 逐位相同。
     models = (
-        ("baseline", "Baseline fixed 2.2", "固定 2.2x / stop 8%", False, "ma200", config.risk_off_leverage, config.risk_on_leverage),
-        ("defensive", "MA200 defensive 0.8/2.4", "risk-off 0.8x / risk-on 2.4x", True, "ma200", 0.8, 2.4),
-        ("growth", "MA200 growth 0.8/2.8", "risk-off 0.8x / risk-on 2.8x", True, "ma200", 0.8, 2.8),
-        ("aggressive", "MA200 aggressive 0.8/3.0", "risk-off 0.8x / risk-on 3.0x", True, "ma200", 0.8, 3.0),
+        ("fixed1", "Fixed 1.0", "固定 1.0x / stop 8%", False, "ma200",
+         1.0, 1.0, 1.0),
+        ("baseline", "Baseline fixed 2.2", "固定 2.2x / stop 8%", False, "ma200",
+         config.base_leverage, config.risk_off_leverage, config.risk_on_leverage),
+        ("defensive", "MA200 defensive 0.8/2.4", "risk-off 0.8x / risk-on 2.4x", True, "ma200",
+         config.base_leverage, 0.8, 2.4),
+        ("growth", "MA200 growth 0.8/2.8", "risk-off 0.8x / risk-on 2.8x", True, "ma200",
+         config.base_leverage, 0.8, 2.8),
+        ("aggressive", "MA200 aggressive 0.8/3.0", "risk-off 0.8x / risk-on 3.0x", True, "ma200",
+         config.base_leverage, 0.8, 3.0),
     )
     datasets = {}
-    for key, label, description, use_regime, regime_mode, risk_off, risk_on in models:
-        model_config = replace(config, risk_off_leverage=risk_off, risk_on_leverage=risk_on)
+    for key, label, description, use_regime, regime_mode, base_leverage, risk_off, risk_on in models:
+        model_config = replace(
+            config,
+            base_leverage=base_leverage,
+            risk_off_leverage=risk_off,
+            risk_on_leverage=risk_on,
+        )
         result = run_backtest(features, model_config, use_regime=use_regime, regime_mode=regime_mode)
         datasets[key] = strategy_payload(key, label, description, result, model_config)
     return compact_payload(datasets)
